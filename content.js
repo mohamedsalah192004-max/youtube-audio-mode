@@ -35,7 +35,9 @@ let cachedVideoElement = null;
 let currentLanguage = 'en';
 let videoPlayHandler = null;
 let videoPauseHandler = null;
-
+let videoTimeUpdateHandler = null;
+let currentPlaybackSpeed = 1;
+// Current language and loaded messages
 // Current language and loaded messages
 let loadedMessages = {};
 
@@ -86,6 +88,12 @@ if (chrome.runtime?.id) {
             if (result.audioMode) {
                 enableAudioMode();
             }
+
+            // Apply saved playback speed
+            if (result.playbackSpeed) {
+                currentPlaybackSpeed = result.playbackSpeed;
+                applyPlaybackSpeed();
+            }
         });
     } catch (error) {
         console.log('[Audio Mode] Error during initialization:', error);
@@ -134,6 +142,42 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sendResponse({ success: false, error: err.message });
         });
         return true; // Keep message channel open for async response
+    } else if (request.action === 'setPlaybackSpeed') {
+        currentPlaybackSpeed = request.speed;
+        applyPlaybackSpeed();
+    } else if (request.action === 'getPlaybackState') {
+        sendResponse(getPlaybackState());
+    } else if (request.action === 'togglePlayback') {
+        const video = getVideoElement();
+        if (video) {
+            if (video.paused) video.play();
+            else video.pause();
+        }
+    } else if (request.action === 'seek') {
+        const video = getVideoElement();
+        if (video && request.time !== undefined) {
+            video.currentTime = request.time;
+        }
+    } else if (request.action === 'seekBy') {
+        const video = getVideoElement();
+        if (video && request.offset !== undefined) {
+            video.currentTime += request.offset;
+        }
+    } else if (request.action === 'setVolume') {
+        const video = getVideoElement();
+        if (video && request.volume !== undefined) {
+            video.volume = request.volume;
+            // Unmute if volume > 0 and was muted
+            if (request.volume > 0 && video.muted) {
+                video.muted = false;
+            }
+        }
+    } else if (request.action === 'getVolume') {
+        const video = getVideoElement();
+        sendResponse({
+            volume: video ? video.volume : 1,
+            muted: video ? video.muted : false
+        });
     }
     return true;
 });
@@ -223,6 +267,11 @@ function disableAudioMode() {
         if (videoPauseHandler) {
             video.removeEventListener('pause', videoPauseHandler);
             videoPauseHandler = null;
+        }
+        if (videoTimeUpdateHandler) {
+            video.removeEventListener('timeupdate', videoTimeUpdateHandler);
+            video.removeEventListener('loadedmetadata', videoTimeUpdateHandler);
+            videoTimeUpdateHandler = null;
         }
     }
 
@@ -632,13 +681,49 @@ async function createAudioModeOverlay() {
 
     if (!videoContainer) return;
 
+    // Get Video Metadata
+    let videoTitle = "YouTube Video";
+    let channelName = "YouTube";
+    let videoId = null;
+
+    try {
+        // Try getting title from document or page elements
+        const titleEl = document.querySelector("#title h1") ||
+            document.querySelector(".ytd-video-primary-info-renderer h1") ||
+            document.querySelector("h1.title");
+
+        if (titleEl) {
+            videoTitle = titleEl.textContent.trim();
+        } else if (document.title) {
+            videoTitle = document.title.replace(" - YouTube", "");
+        }
+
+        // Try getting channel name
+        const channelEl = document.querySelector("#upload-info #channel-name a") ||
+            document.querySelector("ytd-channel-name a");
+        if (channelEl) {
+            channelName = channelEl.textContent.trim();
+        }
+
+        // Get Video ID from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        videoId = urlParams.get('v');
+    } catch (e) {
+        console.log("Error fetching metadata", e);
+    }
+
+    // Thumbnail URL (HQ)
+    const thumbnailUrl = videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '';
+
     // Create overlay element
     audioModeOverlay = document.createElement('div');
     audioModeOverlay.id = 'youtube-audio-mode-overlay';
+
     audioModeOverlay.innerHTML = `
     <div class="audio-mode-content">
       <h2 id="am-overlay-title">${t('activeTitle')}</h2>
       <p id="am-overlay-desc">${t('activeDesc')}</p>
+      
       <div class="audio-visualizer">
         <span class="bar"></span>
         <span class="bar"></span>
@@ -647,7 +732,8 @@ async function createAudioModeOverlay() {
         <span class="bar"></span>
       </div>
     </div >
-        `;
+    `;
+
 
 
     // CSS is now loaded from overlay.css via manifest.json
@@ -666,43 +752,59 @@ async function createAudioModeOverlay() {
     }
 
     // Apply saved theme
-    // Safety check: Stop if extension context is invalidated
     if (chrome.runtime?.id) {
         try {
             chrome.storage.sync.get(['backgroundType', 'backgroundValue'], (result) => {
-                if (chrome.runtime.lastError) {
-                    console.log('[Audio Mode] Could not load theme settings:', chrome.runtime.lastError);
-                    return;
+                if (!chrome.runtime.lastError) {
+                    updateOverlayTheme(result.backgroundType, result.backgroundValue);
                 }
-                updateOverlayTheme(result.backgroundType, result.backgroundValue);
             });
         } catch (error) {
             console.log('[Audio Mode] Error accessing storage:', error);
         }
     }
 
+    // Add play/pause listeners to control animation AND button state
     // Add play/pause listeners to control animation
     const video = getVideoElement();
     const visualizer = audioModeOverlay.querySelector('.audio-visualizer');
 
     if (video && visualizer) {
-        // Set initial state
+        // Initial State
         if (video.paused) {
             visualizer.classList.add('paused');
         }
 
-        // Create named handlers for cleanup
-        videoPlayHandler = () => {
-            visualizer.classList.remove('paused');
-        };
-        videoPauseHandler = () => {
-            visualizer.classList.add('paused');
+        // Logic Helpers
+        const updatePlayState = () => {
+            if (video.paused) {
+                visualizer.classList.add('paused');
+            } else {
+                visualizer.classList.remove('paused');
+            }
         };
 
-        // Listen for play/pause events
+        // Event Listeners
+        videoPlayHandler = updatePlayState;
+        videoPauseHandler = updatePlayState;
+        videoTimeUpdateHandler = null; // No longer needed for overlay
+
         video.addEventListener('play', videoPlayHandler);
         video.addEventListener('pause', videoPauseHandler);
     }
+}
+
+function formatVideoTime(seconds) {
+    if (isNaN(seconds)) return "0:00";
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+
+    const mStr = m.toString().padStart(h > 0 ? 2 : 1, '0');
+    const sStr = s.toString().padStart(2, '0');
+
+    if (h > 0) return `${h}:${mStr}:${sStr} `;
+    return `${m}:${sStr} `;
 }
 
 function updateOverlayTheme(type, value) {
@@ -712,7 +814,7 @@ function updateOverlayTheme(type, value) {
     if (!value) value = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
 
     if (type === 'image') {
-        audioModeOverlay.style.background = `url("${value}") no-repeat center center / cover`;
+        audioModeOverlay.style.background = `url("${value}") no - repeat center center / cover`;
         audioModeOverlay.classList.add('has-image');
     } else {
         audioModeOverlay.style.background = value;
@@ -725,6 +827,7 @@ async function updateOverlayLanguage() {
     // Load messages for the new language
     await loadMessages(currentLanguage);
 
+    // If overlay exists, update its text content only (don't recreate)
     // If overlay exists, update its text content only (don't recreate)
     if (audioModeOverlay) {
         const title = audioModeOverlay.querySelector('#am-overlay-title');
@@ -740,6 +843,63 @@ async function updateOverlayLanguage() {
             audioModeOverlay.removeAttribute('dir');
         }
     }
+}
+
+
+function applyPlaybackSpeed() {
+    const video = getVideoElement();
+    if (video) {
+        video.playbackRate = currentPlaybackSpeed;
+    }
+}
+
+// Helper to extract playback state for popup
+function getPlaybackState() {
+    const video = getVideoElement();
+    if (!video) return null;
+
+    let videoTitle = "YouTube Video";
+    let channelName = "YouTube";
+    let videoId = null;
+
+    try {
+        // Try getting title from document or page elements
+        const titleEl = document.querySelector("#title h1") ||
+            document.querySelector(".ytd-video-primary-info-renderer h1") ||
+            document.querySelector("h1.title");
+
+        if (titleEl) {
+            videoTitle = titleEl.textContent.trim();
+        } else if (document.title) {
+            videoTitle = document.title.replace(" - YouTube", "");
+        }
+
+        // Try getting channel name
+        const channelEl = document.querySelector("#upload-info #channel-name a") ||
+            document.querySelector("ytd-channel-name a");
+        if (channelEl) {
+            channelName = channelEl.textContent.trim();
+        }
+
+        // Get Video ID from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        videoId = urlParams.get('v');
+    } catch (e) {
+        console.log("Error fetching metadata", e);
+    }
+
+    // Thumbnail URL (HQ)
+    const thumbnailUrl = videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '';
+
+    return {
+        title: videoTitle,
+        channel: channelName,
+        thumbnail: thumbnailUrl,
+        paused: video.paused,
+        currentTime: video.currentTime,
+        duration: video.duration,
+        playbackSpeed: video.playbackRate
+    };
 }
 
 // Handle YouTube's SPA navigation with optimized MutationObserver
@@ -771,6 +931,38 @@ function initNavigationObserver() {
         subtree: true,
         childList: true
     });
+
+    // Also attach a MutationObserver to the video element itself if possible, 
+    // or just use an interval to ensure speed sticks?
+    // YouTube resets playbackRate on video load. 
+    // Let's rely on the play event to re-apply speed.
+    document.addEventListener('play', (e) => {
+        if (e.target.tagName === 'VIDEO') {
+            setTimeout(applyPlaybackSpeed, 100);
+        }
+    }, true);
+
+    // Also re-apply on 'ratechange' if it wasn't us? 
+    // No, that might cause loops if we aren't careful.
+    // But we want to enforce OUR speed.
+    document.addEventListener('ratechange', (e) => {
+        if (e.target.tagName === 'VIDEO') {
+            // Only re-apply if it differs significantly
+            if (Math.abs(e.target.playbackRate - currentPlaybackSpeed) > 0.1) {
+                // Determine if this change came from us or external
+                // To avoid fighting, we only enforce if the new rate is "default" (1) 
+                // and we want non-default, OR if we strictly want to enforce our setting.
+
+                // Let's enforce strictly for now, but use a small timeout to avoid immediate fighting
+                // if the user is dragging a slider on the video player itself (unlikely in audio mode).
+                setTimeout(() => {
+                    if (Math.abs(e.target.playbackRate - currentPlaybackSpeed) > 0.1) {
+                        applyPlaybackSpeed();
+                    }
+                }, 500);
+            }
+        }
+    }, true);
 }
 
 // Initialize observer

@@ -75,6 +75,10 @@
         "message": "كل الوقت",
         "description": "Stats filter: all time"
     },
+    "usedData": {
+        "message": "البيانات المستهلكة",
+        "description": "Label for used data statistic"
+    },
     "savedData": {
         "message": "توفير (مقارنة بـ 720p)",
         "description": "Label for data saved statistic"
@@ -146,5 +150,13 @@
     "activeDesc": {
         "message": "نقوم بتوفير باقتك",
         "description": "Overlay description when audio mode is active"
+    },
+    "playbackSpeed": {
+        "message": "سرعة التشغيل",
+        "description": "Label for playback speed control"
+    },
+    "speedNormal": {
+        "message": "عادي",
+        "description": "Label for normal speed (1x)"
     }
 }

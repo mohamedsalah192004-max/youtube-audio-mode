@@ -1,13 +1,29 @@
 // Popup script for YouTube Audio Mode extension
 
 const audioToggle = document.getElementById('audioToggle');
-const statusText = document.getElementById('status-text');
-const toggleSection = document.querySelector('.toggle-section');
+// const statusText = document.getElementById('status-text'); // Removed
+// const toggleSection = document.querySelector('.toggle-section'); // Removed 
+const supportBtn = document.getElementById('support-btn');
 const langBtn = document.getElementById('lang-btn');
+const speedSelect = document.getElementById('speed-select');
+
+// Music Player Elements
+const musicPlayer = document.getElementById('musicPlayer');
+const amThumbnail = document.getElementById('am-thumbnail-img');
+const amPlaceholder = document.getElementById('am-placeholder-art');
+const amTitle = document.getElementById('am-video-title');
+const amChannel = document.getElementById('am-channel-name');
+const amProgressBar = document.getElementById('am-progress-bar');
+const amProgressFill = document.getElementById('am-progress-fill');
+const amCurrentTime = document.getElementById('am-current-time');
+const amTotalTime = document.getElementById('am-total-time');
+const amPlayPauseBtn = document.getElementById('am-play-pause-btn');
 
 // Current language and loaded messages
 let currentLang = 'en';
 let loadedMessages = {};
+// Global Tab ID for the target YouTube tab
+let targetTabId = null;
 
 // Helper function to get translated messages
 function t(messageName) {
@@ -62,23 +78,23 @@ async function setLanguage(lang) {
     }
 
     // Update dynamic status text if needed
-    updateUI(audioToggle.checked);
+    if (targetTabId) {
+        updateUI(audioToggle.checked);
+    }
     updateStats(); // Refresh stats to apply new units
 
     // Save preference
     chrome.storage.sync.set({ language: lang });
 
-    // Broadcast to active tab (for overlay)
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0] && tabs[0].url.includes('youtube.com')) {
-            chrome.tabs.sendMessage(tabs[0].id, {
-                action: 'updateLanguage',
-                language: lang
-            }).catch(() => {
-                // Ignore errors if content script is not ready
-            });
-        }
-    });
+    // Broadcast to target tab
+    if (targetTabId) {
+        chrome.tabs.sendMessage(targetTabId, {
+            action: 'updateLanguage',
+            language: lang
+        }).catch(() => {
+            // Ignore errors if content script is not ready
+        });
+    }
 }
 
 // Initialize Language
@@ -86,6 +102,14 @@ chrome.storage.sync.get(['language'], (result) => {
     // Use stored language preference, or detect from browser
     const detectedLang = chrome.i18n.getUILanguage().startsWith('ar') ? 'ar' : 'en';
     setLanguage(result.language || detectedLang);
+
+    // Initialize Speed
+    chrome.storage.sync.get(['playbackSpeed'], (res) => {
+        const speed = res.playbackSpeed || 1;
+        if (speedSelect) {
+            speedSelect.value = speed;
+        }
+    });
 });
 
 
@@ -95,34 +119,64 @@ langBtn.addEventListener('click', () => {
     setLanguage(newLang);
 });
 
-// Initialize popup state
-chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    const currentTab = tabs[0];
 
-    // Check if we're on YouTube watch page
-    if (!currentTab || !currentTab.url || !currentTab.url.match(/youtube\.com\/watch/)) {
-        statusText.textContent = t('onlyYoutube');
+// ===== NEW TAB DISCOVERY LOGIC =====
+
+async function findTargetTab() {
+    // 1. Check Active Tab First
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (activeTab && activeTab.url && activeTab.url.match(/youtube\.com\/watch/)) {
+        return activeTab;
+    }
+
+    // 2. Search for background YouTube tabs
+    const tabs = await chrome.tabs.query({ url: "*://www.youtube.com/watch*" });
+
+    if (tabs.length === 0) return null;
+
+    // 3. Sort tabs: Audible tags first, then general
+    tabs.sort((a, b) => {
+        if (a.audible && !b.audible) return -1;
+        if (!a.audible && b.audible) return 1;
+        return 0;
+    });
+
+    return tabs[0];
+}
+
+// Initialize popup state
+(async function init() {
+    const tab = await findTargetTab();
+
+    if (!tab) {
+        // No YouTube tab found anywhere
+        // statusText.textContent = t('onlyYoutube'); // Removed
         audioToggle.disabled = true;
-        toggleSection.style.opacity = '0.5';
+        // toggleSection.style.opacity = '0.5'; // Removed
         return;
     }
 
+    targetTabId = tab.id;
+    console.log("Connected to YouTube tab:", tab.title);
+
     // Get current audio mode status from content script
-    chrome.tabs.sendMessage(currentTab.id, { action: 'getStatus' })
-        .then((response) => {
-            if (response) {
-                updateUI(response.enabled);
-            } else {
-                // Fallback to storage
-                checkStorageState();
-            }
-        })
-        .catch((error) => {
-            // Content script not ready yet, check storage
-            console.log('Content script not ready:', error.message);
+    try {
+        const response = await chrome.tabs.sendMessage(targetTabId, { action: 'getStatus' });
+        if (response) {
+            updateUI(response.enabled);
+        } else {
             checkStorageState();
-        });
-});
+        }
+    } catch (error) {
+        // Content script not ready yet, check storage
+        console.log('Content script not ready:', error.message);
+        checkStorageState();
+    }
+
+    // Initialize Music Player
+    requestPlaybackState();
+    startPlaybackPolling();
+})();
 
 // Fallback function to check storage
 function checkStorageState() {
@@ -134,42 +188,230 @@ function checkStorageState() {
 // Handle toggle change
 audioToggle.addEventListener('change', () => {
     const enabled = audioToggle.checked;
+    if (!targetTabId) return;
 
     // Send message to content script
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        const currentTab = tabs[0];
-
-        chrome.tabs.sendMessage(currentTab.id, { action: 'toggleAudioMode' })
-            .then((response) => {
-                if (response) {
-                    updateUI(response.enabled);
-                }
-            })
-            .catch((error) => {
-                console.log('Could not send message to content script:', error.message);
-                // Update storage directly as fallback
-                chrome.storage.sync.set({ audioMode: enabled }, () => {
-                    updateUI(enabled);
-                    // Reload the tab to apply changes
-                    if (currentTab && currentTab.url && currentTab.url.match(/youtube\.com\/watch/)) {
-                        chrome.tabs.reload(currentTab.id);
-                    }
-                });
+    chrome.tabs.sendMessage(targetTabId, { action: 'toggleAudioMode' })
+        .then((response) => {
+            if (response) {
+                updateUI(response.enabled);
+            }
+        })
+        .catch((error) => {
+            console.log('Could not send message to content script:', error.message);
+            // Update storage directly as fallback
+            chrome.storage.sync.set({ audioMode: enabled }, () => {
+                updateUI(enabled);
+                // Reload the tab to apply changes if possible
+                chrome.tabs.reload(targetTabId);
             });
-    });
+        });
 });
+
+
+// Speed Slider Logic
+if (speedSelect) {
+    speedSelect.addEventListener('change', (e) => {
+        const speed = parseFloat(e.target.value);
+
+        // Save to storage
+        chrome.storage.sync.set({ playbackSpeed: speed });
+
+        // Send to target tab
+        if (targetTabId) {
+            chrome.tabs.sendMessage(targetTabId, {
+                action: 'setPlaybackSpeed',
+                speed: speed
+            });
+        }
+    });
+}
+
+// Volume Control Logic
+const volumeSelect = document.getElementById('volume-select');
+if (volumeSelect) {
+    // Initialize Volume
+    chrome.storage.sync.get(['volume'], (res) => {
+        const volume = res.volume !== undefined ? res.volume : 1;
+        volumeSelect.value = volume;
+    });
+
+    volumeSelect.addEventListener('change', (e) => {
+        const volume = parseFloat(e.target.value);
+
+        // Save to storage
+        chrome.storage.sync.set({ volume: volume });
+
+        // Send to target tab
+        if (targetTabId) {
+            chrome.tabs.sendMessage(targetTabId, {
+                action: 'setVolume',
+                volume: volume
+            });
+        }
+    });
+}
+
+
+// ===== MUSIC PLAYER LOGIC =====
+
+function requestPlaybackState() {
+    if (!targetTabId) return;
+
+    chrome.tabs.sendMessage(targetTabId, { action: 'getPlaybackState' }, (response) => {
+        if (!chrome.runtime.lastError && response) {
+            updateMusicPlayerUI(response);
+        } else {
+            // Hide player if no content script response (not on YouTube or error)
+            musicPlayer.classList.add('hidden');
+        }
+    });
+}
+
+function startPlaybackPolling() {
+    // Poll every second to keep time in sync if efficient message passing fails
+    setInterval(requestPlaybackState, 1000);
+}
+
+function updateMusicPlayerUI(state) {
+    if (!state) return;
+
+    // Show player
+    musicPlayer.classList.remove('hidden');
+
+    // Metadata
+    // Clean up title if needed (remove (1) etc)
+    const displayTitle = state.title || t('noVideo');
+    if (amTitle.textContent !== displayTitle) {
+        amTitle.textContent = displayTitle;
+
+        // Check for overflow and enable scrolling
+        const wrapper = amTitle.parentElement;
+        // Reset first
+        amTitle.classList.remove('moving');
+        amTitle.style.removeProperty('--scroll-distance');
+
+        // Force layout update and check overflow
+        if (wrapper && amTitle.scrollWidth > wrapper.clientWidth) {
+            const overflow = amTitle.scrollWidth - wrapper.clientWidth;
+            // Scroll just enough to see the end, plus a little buffer
+            const buffer = 10;
+            amTitle.style.setProperty('--scroll-distance', `-${overflow + buffer}px`);
+
+            // Adjust speed based on distance (approx 25px per second + pause time compensation)
+            // Increased multiplier to keep movement readable with the new pauses
+            const duration = Math.max(5, (overflow + buffer) * 0.08);
+            amTitle.style.animationDuration = `${duration}s`;
+
+            amTitle.classList.add('moving');
+        }
+    }
+    amChannel.textContent = state.channel || 'YouTube';
+
+    // Thumbnail
+    if (state.thumbnail) {
+        amThumbnail.src = state.thumbnail;
+        amThumbnail.classList.remove('hidden');
+        amPlaceholder.classList.add('hidden');
+    } else {
+        amThumbnail.classList.add('hidden');
+        amPlaceholder.classList.remove('hidden');
+    }
+
+    // Controls
+    const playIcon = `<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>`;
+    const pauseIcon = `<svg viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>`;
+
+    amPlayPauseBtn.innerHTML = state.paused ? playIcon : pauseIcon;
+    amPlayPauseBtn.disabled = false;
+
+    // Timeline
+    if (state.duration && !isNaN(state.duration)) {
+        amProgressBar.disabled = false;
+        amProgressBar.max = state.duration;
+        amProgressBar.value = state.currentTime;
+
+        amCurrentTime.textContent = formatTime(state.currentTime);
+        amTotalTime.textContent = formatTime(state.duration);
+
+        const percent = (state.currentTime / state.duration) * 100;
+        amProgressFill.style.width = `${percent}%`;
+    } else {
+        amProgressBar.disabled = true;
+        amCurrentTime.textContent = "0:00";
+        amTotalTime.textContent = "0:00";
+        amProgressFill.style.width = "0%";
+    }
+}
+
+function formatTime(seconds) {
+    if (isNaN(seconds)) return "0:00";
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+
+    const mStr = m.toString().padStart(h > 0 ? 2 : 1, '0');
+    const sStr = s.toString().padStart(2, '0');
+
+    if (h > 0) return `${h}:${mStr}:${sStr}`;
+    return `${m}:${sStr}`;
+}
+
+const amJumpBackBtn = document.getElementById('am-jump-back');
+const amJumpForwardBtn = document.getElementById('am-jump-forward');
+
+// User Actions
+amPlayPauseBtn.addEventListener('click', () => {
+    if (targetTabId) {
+        chrome.tabs.sendMessage(targetTabId, { action: 'togglePlayback' });
+        // Optimistic UI update could go here
+        requestPlaybackState(); // Refresh state immediately
+    }
+});
+
+if (amJumpBackBtn) {
+    amJumpBackBtn.addEventListener('click', () => {
+        if (targetTabId) {
+            chrome.tabs.sendMessage(targetTabId, { action: 'seekBy', offset: -10 });
+        }
+    });
+}
+
+if (amJumpForwardBtn) {
+    amJumpForwardBtn.addEventListener('click', () => {
+        if (targetTabId) {
+            chrome.tabs.sendMessage(targetTabId, { action: 'seekBy', offset: 10 });
+        }
+    });
+}
+
+amProgressBar.addEventListener('input', (e) => {
+    const time = parseFloat(e.target.value);
+
+    // Update UI immediately for drag effect
+    amCurrentTime.textContent = formatTime(time);
+    const percent = (time / amProgressBar.max) * 100;
+    amProgressFill.style.width = `${percent}%`;
+
+    // Send seek command
+    if (targetTabId) {
+        chrome.tabs.sendMessage(targetTabId, { action: 'seek', time: time });
+    }
+});
+
+// ===== EXISTING LOGIC =====
 
 function updateUI(enabled) {
     audioToggle.checked = enabled;
 
     if (enabled) {
-        statusText.textContent = t('statusOn');
-        statusText.classList.add('active');
-        toggleSection.classList.add('active');
+        // statusText.textContent = t('statusOn'); // Removed
+        // statusText.classList.add('active'); // Removed
+        // toggleSection.classList.add('active');
     } else {
-        statusText.textContent = t('statusOff');
-        statusText.classList.remove('active');
-        toggleSection.classList.remove('active');
+        // statusText.textContent = t('statusOff'); // Removed
+        // statusText.classList.remove('active'); // Removed
+        // toggleSection.classList.remove('active');
     }
 }
 
@@ -241,9 +483,14 @@ function updateStats() {
             const savedVs1080p = usage1080p - usage144p;
 
             // Update UI
+            const dataUsedElement = document.getElementById('data-used-value');
             const dataSavedElement = document.getElementById('data-saved-value');
             const listenedTimeElement = document.getElementById('listened-time-value');
             const activeTimeElement = document.getElementById('active-time-value');
+
+            if (dataUsedElement) {
+                dataUsedElement.textContent = formatData(usage144p);
+            }
 
             if (dataSavedElement) {
                 dataSavedElement.textContent = formatData(savedVs720p);
@@ -256,40 +503,10 @@ function updateStats() {
             if (activeTimeElement) {
                 activeTimeElement.textContent = formatTime(totalActiveSeconds);
             }
-
-            // Update Table (Comparison uses statsLogs data mainly)
-            updateTableVal('usage-144p', usage144p);
-            updateTableVal('usage-720p', usage720p);
-            updateTableVal('saved-720p', savedVs720p, true);
-            updateTableVal('usage-1080p', usage1080p);
-            updateTableVal('saved-1080p', savedVs1080p, true);
         });
     } catch (error) {
         console.error('[Audio Mode] Error updating stats:', error);
     }
-}
-
-function formatTime(seconds) {
-    const s = Math.floor(seconds % 60);
-    const m = Math.floor((seconds / 60) % 60);
-    const h = Math.floor(seconds / 3600);
-
-    const timeH = t('timeH');
-    const timeM = t('timeM');
-    const timeS = t('timeS');
-
-    if (h > 0) return `${h}${timeH} ${m}${timeM}`;
-    if (m > 0) return `${m}${timeM} ${s}${timeS}`;
-    return `${s}${timeS}`;
-}
-
-function updateTableVal(id, mbValue, isSavings = false) {
-    const el = document.getElementById(id);
-    if (!el) return;
-
-    // Add + or - sign if it's a savings/diff value
-    const prefix = isSavings ? '+' : '';
-    el.textContent = `${prefix}${formatData(mbValue)}`;
 }
 
 function formatData(mb) {
@@ -500,16 +717,22 @@ function saveAndApplyTheme(type, value) {
         backgroundValue: value
     });
 
-    // Send to active tab
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0] && tabs[0].url.includes('youtube.com')) {
-            chrome.tabs.sendMessage(tabs[0].id, {
-                action: 'updateTheme',
-                backgroundType: type,
-                backgroundValue: value
-            }).catch(() => {
-                // Ignore errors if content script is not ready
-            });
-        }
+    // Send to target tab
+    if (targetTabId) {
+        chrome.tabs.sendMessage(targetTabId, {
+            action: 'updateTheme',
+            backgroundType: type,
+            backgroundValue: value
+        }).catch(() => {
+            // Ignore errors if content script is not ready
+        });
+    }
+}
+
+// Support Button Logic
+if (supportBtn) {
+    supportBtn.addEventListener('click', () => {
+        chrome.tabs.create({ url: 'https://www.paypal.com/paypalme/devahmedadli/5' });
     });
 }
+

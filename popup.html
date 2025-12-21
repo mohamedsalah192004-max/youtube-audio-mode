@@ -10,15 +10,19 @@
 
 <body>
     <div class="container">
-        <div class="header">
-            <div class="header-info">
-                <h1 data-i18n="appName">YouTube Audio Mode</h1>
-                <p class="subtitle" data-i18n="appDesc">Save bandwidth, keep the music</p>
-            </div>
-            <div style="display: flex; gap: 8px;">
-                <button id="lang-btn" class="icon-btn" title="Language/لغة"
-                    style="font-family: 'Cairo', sans-serif; font-weight: 700;">
-                    ع
+        <div class="top-nav">
+            <button id="lang-btn" class="icon-btn text-btn" title="Language/لغة"
+                style="font-family: 'Cairo', sans-serif; font-weight: 700;">
+                ع
+            </button>
+            <div class="top-right-actions">
+
+                <button id="support-btn" class="icon-btn" title="Support">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="12" y1="1" x2="12" y2="23"></line>
+                        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+                    </svg>
                 </button>
                 <button id="settings-btn" class="icon-btn" title="Settings">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -29,6 +33,17 @@
                     </svg>
                 </button>
             </div>
+        </div>
+
+        <div class="header">
+            <div class="header-info">
+                <h1 data-i18n="appName">YouTube Audio Mode</h1>
+                <p class="subtitle" data-i18n="appDesc">Save bandwidth, keep the audio</p>
+            </div>
+            <label class="toggle-switch">
+                <input type="checkbox" id="audioToggle">
+                <span class="slider"></span>
+            </label>
         </div>
 
         <div id="settings-panel" class="settings-panel">
@@ -91,15 +106,86 @@
         </div>
 
         <div class="content">
-            <div class="toggle-section">
-                <div class="toggle-info">
-                    <h2 data-i18n="audioOnly">Audio Only</h2>
-                    <p id="status-text" data-i18n="statusOff">Click to enable</p>
+            <!-- Playback Speed Control removed from here -->
+
+            <!-- Music Player Interface -->
+            <div class="music-player-container hidden" id="musicPlayer">
+                <!-- Col 1: Art -->
+                <div class="player-col-art">
+                    <div class="am-album-art">
+                        <img src="" alt="Thumbnail" id="am-thumbnail-img" class="hidden">
+                        <div class="placeholder-art" id="am-placeholder-art">
+                            <svg viewBox="0 0 24 24">
+                                <path
+                                    d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"
+                                    fill="currentColor" />
+                            </svg>
+                        </div>
+                    </div>
                 </div>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="audioToggle">
-                    <span class="slider"></span>
-                </label>
+
+                <!-- Col 2: Info & Timeline -->
+                <div class="player-col-main">
+                    <div class="track-info">
+                        <div class="title-scroll-wrapper">
+                            <h2 id="am-video-title" data-i18n="noVideo">No Video Playing</h2>
+                        </div>
+                        <p id="am-channel-name">YouTube</p>
+                    </div>
+
+                    <div class="timeline-container" dir="ltr">
+                        <span id="am-current-time">0:00</span>
+                        <div class="progress-bar-wrapper">
+                            <input type="range" class="am-progress-bar" id="am-progress-bar" min="0" max="100" value="0"
+                                step="0.1" disabled>
+                            <div class="progress-fill" id="am-progress-fill" style="width: 0%"></div>
+                        </div>
+                        <span id="am-total-time">0:00</span>
+                    </div>
+                </div>
+
+                <!-- Col 3: Controls -->
+                <div class="player-col-controls">
+                    <div class="control-group-main">
+                        <button id="am-jump-back" class="control-btn small" title="Rewind 10s">
+                            <svg viewBox="0 0 24 24">
+                                <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z" />
+                            </svg>
+                        </button>
+
+                        <button id="am-play-pause-btn" class="control-btn" title="Play/Pause" disabled>
+                            <svg viewBox="0 0 24 24">
+                                <path d="M8 5v14l11-7z" />
+                            </svg>
+                        </button>
+
+                        <button id="am-jump-forward" class="control-btn small" title="Forward 10s">
+                            <svg viewBox="0 0 24 24">
+                                <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z" />
+                            </svg>
+                        </button>
+                    </div>
+
+                    <div class="speed-dropdown-wrapper">
+                        <select id="speed-select" title="Playback Speed">
+                            <option value="0.25">0.25x</option>
+                            <option value="0.5">0.5x</option>
+                            <option value="0.75">0.75x</option>
+                            <option value="1" selected>1x</option>
+                            <option value="1.25">1.25x</option>
+                            <option value="1.5">1.5x</option>
+                            <option value="1.75">1.75x</option>
+                            <option value="2">2x</option>
+                        </select>
+                        <select id="volume-select" title="Volume">
+                            <option value="0">🔇</option>
+                            <option value="0.25">🔊 25%</option>
+                            <option value="0.5">🔊 50%</option>
+                            <option value="0.75">🔊 75%</option>
+                            <option value="1" selected>🔊 100%</option>
+                        </select>
+                    </div>
+                </div>
             </div>
 
             <div class="shortcuts-hint">
@@ -118,6 +204,13 @@
             </div>
 
             <div class="stats-section">
+                <div class="stat-card">
+                    <div class="stat-icon">📡</div>
+                    <div class="stat-content">
+                        <div class="stat-value" id="data-used-value">0 MB</div>
+                        <div class="stat-label" data-i18n="usedData">Data Used</div>
+                    </div>
+                </div>
                 <div class="stat-card">
                     <div class="stat-icon">📊</div>
                     <div class="stat-content">
@@ -139,38 +232,6 @@
                         <div class="stat-label" data-i18n="activeTime">Active</div>
                     </div>
                 </div>
-            </div>
-
-            <div class="table-section">
-                <h3 data-i18n="estDataUsage">Est. Data Usage</h3>
-                <table class="comparison-table">
-                    <thead>
-                        <tr>
-                            <th data-i18n="quality">Quality</th>
-                            <th data-i18n="usage">Usage</th>
-                            <th data-i18n="saved">Saved</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr class="row-144p active-mode">
-                            <td>
-                                <span class="quality-tag" data-i18n="audioMode">Audio Mode</span>
-                            </td>
-                            <td id="usage-144p">0 MB</td>
-                            <td>-</td>
-                        </tr>
-                        <tr>
-                            <td>720p</td>
-                            <td id="usage-720p">0 MB</td>
-                            <td id="saved-720p" class="savings-positive">0 MB</td>
-                        </tr>
-                        <tr>
-                            <td>1080p</td>
-                            <td id="usage-1080p">0 MB</td>
-                            <td id="saved-1080p" class="savings-positive">0 MB</td>
-                        </tr>
-                    </tbody>
-                </table>
             </div>
         </div>
 

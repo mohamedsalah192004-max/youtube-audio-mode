@@ -107,10 +107,25 @@ body {
 }
 
 .header {
-  text-align: center;
-  margin-bottom: 24px;
-  padding-bottom: 16px;
+  text-align: left;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.top-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.top-right-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .header h1 {
@@ -136,24 +151,6 @@ body {
 }
 
 /* Toggle Section */
-.toggle-section {
-  background: rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 16px;
-  padding: 20px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  transition: all 0.3s ease;
-}
-
-.toggle-section:hover {
-  background: rgba(255, 255, 255, 0.08);
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-}
-
 .toggle-info h2 {
   font-size: 18px;
   font-weight: 600;
@@ -293,9 +290,10 @@ kbd {
 }
 
 /* Stats Section */
+/* Stats Section */
 .stats-section {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(4, 1fr);
   gap: 6px;
 }
 
@@ -304,7 +302,7 @@ kbd {
   backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 10px;
-  padding: 8px;
+  padding: 8px 4px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -319,7 +317,7 @@ kbd {
 }
 
 .stat-icon {
-  font-size: 16px;
+  font-size: 14px;
   margin-bottom: 2px;
 }
 
@@ -329,16 +327,17 @@ kbd {
 }
 
 .stat-value {
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 700;
   color: #667eea;
   line-height: 1.2;
 }
 
 .stat-label {
-  font-size: 10px;
+  font-size: 9px;
   color: rgba(255, 255, 255, 0.5);
   margin-top: 2px;
+  white-space: nowrap;
 }
 
 /* Table Section */
@@ -426,21 +425,9 @@ kbd {
 }
 
 /* Settings Panel & Controls */
-.header {
-  position: relative;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  text-align: left;
-}
-
-.header-info h1 {
-  font-size: 20px;
-  margin-bottom: 2px;
-}
-
 .header-info .subtitle {
   margin-bottom: 0;
+  font-size: 13px;
 }
 
 .icon-btn {
@@ -678,4 +665,323 @@ input[type="color"]::-webkit-color-swatch {
 
 .hidden {
   display: none !important;
+}
+
+#speed-select,
+#volume-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 2px center;
+  background-size: 10px;
+  color: var(--text-secondary);
+  border: none;
+  border-radius: 6px;
+  padding: 4px 16px 4px 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s;
+  font-family: inherit;
+  text-align: right;
+  min-width: 65px;
+}
+
+#speed-select:hover,
+#volume-select:hover {
+  color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+#speed-select:focus,
+#volume-select:focus {
+  color: var(--text-primary);
+}
+
+#speed-select option,
+#volume-select option {
+  background: var(--bg-dark);
+  color: white;
+  text-align: left;
+}
+
+[dir="rtl"] .stat-card {
+  border-right: none;
+}
+
+/* Music Player Styles */
+.music-player-container {
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  display: grid;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.music-player-container.hidden {
+  display: none;
+}
+
+/* Column 1: Album Art */
+.player-col-art {
+  display: flex;
+  align-items: center;
+}
+
+.am-album-art {
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  position: relative;
+  background: #2a2a2a;
+  flex-shrink: 0;
+}
+
+.am-album-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.am-album-art img.hidden {
+  display: none;
+}
+
+.placeholder-art {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.2);
+}
+
+.placeholder-art svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* Column 2: Main Info */
+.player-col-main {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  overflow: hidden; /* For text truncation */
+  min-width: 0; /* Flexbox text truncation fix */
+}
+
+.track-info {
+  width: 100%;
+  text-align: left;
+}
+
+#am-video-title {
+  font-size: 12px;
+  font-weight: 700;
+  margin: 0 0 2px 0;
+  color: var(--text-primary);
+  white-space: nowrap;
+  line-height: normal;
+  display: inline-block;
+}
+
+.title-scroll-wrapper {
+  overflow: hidden;
+  white-space: nowrap;
+  width: 100%;
+  position: relative;
+  /* Add a subtle fade on edges to indicate scrolling */
+  mask-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    #000 5%,
+    #000 95%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    #000 5%,
+    #000 95%,
+    transparent 100%
+  );
+}
+
+#am-video-title.moving {
+  animation: scroll-title linear infinite;
+}
+
+@keyframes scroll-title {
+  0%,
+  15% {
+    transform: translateX(0);
+  }
+  85%,
+  100% {
+    transform: translateX(var(--scroll-distance));
+  }
+}
+
+#am-channel-name {
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.timeline-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+#am-current-time,
+#am-total-time {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  min-width: 24px;
+}
+
+.progress-bar-wrapper {
+  flex: 1;
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+}
+
+.am-progress-bar {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  position: absolute;
+  top: 0;
+  left: 0;
+  margin: 0;
+  cursor: pointer;
+  z-index: 2;
+}
+
+/* Reset range thumb */
+.am-progress-bar::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 10px;
+  width: 10px;
+  border-radius: 50%;
+  background: white;
+  opacity: 0; /* Hidden unless hovering */
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.progress-bar-wrapper:hover .am-progress-bar::-webkit-slider-thumb {
+  opacity: 1;
+}
+
+.progress-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  background: var(--primary-color);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Column 3: Controls (Now Row 2) */
+.player-col-controls {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  margin-top: 4px;
+}
+
+.control-group-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.control-btn {
+  background: var(--primary-color);
+  border: none;
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: white;
+  transition: all 0.2s;
+  box-shadow: 0 2px 6px rgba(102, 126, 234, 0.4);
+}
+
+.control-btn:hover:not(:disabled) {
+  background: var(--primary-dark);
+  transform: scale(1.05);
+}
+
+.control-btn:disabled {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.3);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.control-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.control-btn.small {
+  width: 28px;
+  height: 28px;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.6);
+  box-shadow: none;
+}
+
+.control-btn.small:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  transform: scale(1.05);
+}
+
+.control-btn.small svg {
+  width: 14px;
+  height: 14px;
+}
+
+#speed-select {
+  padding: 2px 6px;
+  font-size: 11px;
+  height: auto;
 }
