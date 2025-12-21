@@ -67,16 +67,6 @@ We do not collect any personal data. All preferences and usage statistics are st
 - HTML5, CSS3, JavaScript (ES6+)
 - Chrome Extension API (Manifest V3)
 
-## 🤝 Contributing
-
-Contributions are welcome! If you have ideas for new features or bug fixes:
-
-1.  Fork the repository.
-2.  Create your feature branch (`git checkout -b feature/AmazingFeature`).
-3.  Commit your changes (`git commit -m 'Add some AmazingFeature'`).
-4.  Push to the branch (`git push origin feature/AmazingFeature`).
-5.  Open a Pull Request.
-
 ## 📝 License
 
 This project is licensed under the MIT License.
