@@ -490,17 +490,30 @@ const forceLowestQuality = (player, video) => {
  * Includes retry logic for reliability
  * @param {number} attempts - Number of retry attempts remaining
  */
-const restoreQuality = (attempts = 3) => {
+const restoreQuality = () => {
     const player = document.getElementById('movie_player');
     const video = getVideoElement();
 
     if (!player || !video) {
-        if (attempts > 0) {
-            setTimeout(() => restoreQuality(attempts - 1), 100);
-        }
+        // Retry once to find the player
+        setTimeout(() => {
+            const p = document.getElementById('movie_player');
+            const v = getVideoElement();
+            if (p && v) {
+                doRestoreQuality(p, v);
+            }
+        }, 200);
         return;
     }
 
+    doRestoreQuality(player, video);
+};
+
+/**
+ * Actually perform the quality restoration
+ * Uses UI click for reliable instant restoration, then allows user control
+ */
+const doRestoreQuality = (player, video) => {
     try {
         const availableLevels = player.getAvailableQualityLevels ? player.getAvailableQualityLevels() : [];
 
@@ -513,52 +526,24 @@ const restoreQuality = (attempts = 3) => {
             uiTargetText = 'Auto';
         }
 
-        // Apply quality restoration using robust methods
+        // Step 1: Clear any quality range locks to restore user control
         if (player.setPlaybackQualityRange) {
-            // Clear any existing range constraint first (important for breaking manual locks)
             player.setPlaybackQualityRange('auto', 'auto');
-
-            // Then set specific if not auto
-            if (target !== 'auto') {
-                player.setPlaybackQualityRange(target, target);
-            }
         }
 
+        // Step 2: Try API methods first (they're fast and work sometimes)
         if (player.setPlaybackQuality) {
             player.setPlaybackQuality(target);
         }
 
-        if (player.setInternalQuality) {
-            player.setInternalQuality(target);
-        }
+        // Step 3: Use UI click for reliable instant restoration
+        // This is a one-time action, not an ongoing enforcement
+        clickQualitySetting(video, uiTargetText);
 
-        if (player.setPreferredQuality) {
-            player.setPreferredQuality(target);
-        }
-
-        // VERIFY and FALBACK/RETRY
-        setTimeout(() => {
-            const currentQuality = player.getPlaybackQuality ? player.getPlaybackQuality() : 'unknown';
-
-            // If not successful yet...
-            if (target === QUALITY.RESTORE && currentQuality !== QUALITY.RESTORE) {
-                if (attempts > 0) {
-                    // Try UI click as part of retry if API failed
-                    clickQualitySetting(video, uiTargetText);
-
-                    // Schedule next retry
-                    setTimeout(() => restoreQuality(attempts - 1), 800);
-                } else {
-                }
-            } else {
-            }
-        }, 500);
+        // User now has full control - no further enforcement
 
     } catch (e) {
         console.error('[Audio Mode] Error restoring quality:', e);
-        if (attempts > 0) {
-            setTimeout(() => restoreQuality(attempts - 1), 1000);
-        }
     }
 };
 

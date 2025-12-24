@@ -712,6 +712,19 @@ input[type="color"]::-webkit-color-swatch {
   border-right: none;
 }
 
+/* RTL Support for Playback Controls */
+[dir="rtl"] #am-jump-back {
+  order: 3;
+}
+
+[dir="rtl"] #am-play-pause-btn {
+  order: 2;
+}
+
+[dir="rtl"] #am-jump-forward {
+  order: 1;
+}
+
 /* Music Player Styles */
 .music-player-container {
   padding: 16px;
