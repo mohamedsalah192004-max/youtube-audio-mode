@@ -37,6 +37,7 @@ let videoPlayHandler = null;
 let videoPauseHandler = null;
 let videoTimeUpdateHandler = null;
 let currentPlaybackSpeed = 1;
+let isApplyingSpeed = false; // Debounce flag to prevent loops
 // Current language and loaded messages
 // Current language and loaded messages
 let loadedMessages = {};
@@ -833,8 +834,16 @@ async function updateOverlayLanguage() {
 
 function applyPlaybackSpeed() {
     const video = getVideoElement();
-    if (video) {
-        video.playbackRate = currentPlaybackSpeed;
+    if (video && !isApplyingSpeed) {
+        // Check if speed actually needs to change to avoid unnecessary updates
+        if (Math.abs(video.playbackRate - currentPlaybackSpeed) > 0.01) {
+            isApplyingSpeed = true;
+            video.playbackRate = currentPlaybackSpeed;
+            // Reset flag after a short delay
+            setTimeout(() => {
+                isApplyingSpeed = false;
+            }, 100);
+        }
     }
 }
 
@@ -917,37 +926,47 @@ function initNavigationObserver() {
         childList: true
     });
 
-    // Also attach a MutationObserver to the video element itself if possible, 
-    // or just use an interval to ensure speed sticks?
-    // YouTube resets playbackRate on video load. 
-    // Let's rely on the play event to re-apply speed.
-    document.addEventListener('play', (e) => {
-        if (e.target.tagName === 'VIDEO') {
-            setTimeout(applyPlaybackSpeed, 100);
-        }
-    }, true);
+    // Robust playback speed enforcement
+    // YouTube resets playbackRate on video load, quality change, ads, and navigation.
+    // We listen to multiple events to ensure our speed persists.
 
-    // Also re-apply on 'ratechange' if it wasn't us? 
-    // No, that might cause loops if we aren't careful.
-    // But we want to enforce OUR speed.
+    const speedEnforcementEvents = ['play', 'loadedmetadata', 'loadeddata', 'canplay'];
+
+    speedEnforcementEvents.forEach(eventName => {
+        document.addEventListener(eventName, (e) => {
+            if (e.target.tagName === 'VIDEO') {
+                // Apply speed with a small delay to let YouTube finish its initialization
+                setTimeout(applyPlaybackSpeed, 150);
+            }
+        }, true);
+    });
+
+    // Re-apply on 'ratechange' if it wasn't triggered by us
     document.addEventListener('ratechange', (e) => {
-        if (e.target.tagName === 'VIDEO') {
-            // Only re-apply if it differs significantly
-            if (Math.abs(e.target.playbackRate - currentPlaybackSpeed) > 0.1) {
-                // Determine if this change came from us or external
-                // To avoid fighting, we only enforce if the new rate is "default" (1) 
-                // and we want non-default, OR if we strictly want to enforce our setting.
-
-                // Let's enforce strictly for now, but use a small timeout to avoid immediate fighting
-                // if the user is dragging a slider on the video player itself (unlikely in audio mode).
+        if (e.target.tagName === 'VIDEO' && !isApplyingSpeed) {
+            // Check if the rate differs from our target
+            if (Math.abs(e.target.playbackRate - currentPlaybackSpeed) > 0.01) {
+                // Use a short timeout to avoid fighting with YouTube's internal changes
                 setTimeout(() => {
-                    if (Math.abs(e.target.playbackRate - currentPlaybackSpeed) > 0.1) {
+                    // Double-check the rate is still different (YouTube might have settled)
+                    const video = getVideoElement();
+                    if (video && Math.abs(video.playbackRate - currentPlaybackSpeed) > 0.01) {
                         applyPlaybackSpeed();
                     }
-                }, 500);
+                }, 200);
             }
         }
     }, true);
+
+    // Periodic speed enforcement check (runs every 2 seconds while video is playing)
+    setInterval(() => {
+        const video = getVideoElement();
+        if (video && !video.paused && !isApplyingSpeed) {
+            if (Math.abs(video.playbackRate - currentPlaybackSpeed) > 0.01) {
+                applyPlaybackSpeed();
+            }
+        }
+    }, 2000);
 }
 
 // Initialize observer
