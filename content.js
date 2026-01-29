@@ -70,7 +70,7 @@ async function loadMessages(lang) {
 // Initialize by checking saved preference
 if (chrome.runtime?.id) {
     try {
-        chrome.storage.sync.get(['audioMode', 'language'], async function (result) {
+        chrome.storage.sync.get(['audioMode', 'language', 'playbackSpeed'], async function (result) {
             if (chrome.runtime.lastError) {
                 console.log('[Audio Mode] Could not load initial state:', chrome.runtime.lastError);
                 return;
