@@ -130,7 +130,7 @@ async function findTargetTab() {
     }
 
     // 2. Search for background YouTube tabs
-    const tabs = await chrome.tabs.query({ url: "*://www.youtube.com/watch*" });
+    const tabs = await chrome.tabs.query({ url: "https://www.youtube.com/watch*" });
 
     if (tabs.length === 0) return null;
 
@@ -215,7 +215,7 @@ if (speedSelect) {
         const speed = parseFloat(e.target.value);
 
         // Save to storage
-        chrome.storage.sync.set({ playbackSpeed: speed });
+        chrome.storage.sync.set({ playbackSpeed: speed, userSetSpeed: true });
 
         // Send to target tab
         if (targetTabId) {
@@ -268,10 +268,20 @@ function requestPlaybackState() {
     });
 }
 
+let playbackPollInterval = null;
 function startPlaybackPolling() {
-    // Poll every second to keep time in sync if efficient message passing fails
-    setInterval(requestPlaybackState, 1000);
+    // Reduced fallback poll (3s) — primary sync is now event-driven via
+    // chrome.runtime.onMessage receiving 'playbackStateUpdate' from content script.
+    if (playbackPollInterval) clearInterval(playbackPollInterval);
+    playbackPollInterval = setInterval(requestPlaybackState, 3000);
 }
+
+// Listen for real-time state pushed from content script
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === 'playbackStateUpdate' && message.state) {
+        updateMusicPlayerUI(message.state);
+    }
+});
 
 function updateMusicPlayerUI(state) {
     if (!state) return;
@@ -342,6 +352,26 @@ function updateMusicPlayerUI(state) {
         amTotalTime.textContent = "0:00";
         amProgressFill.style.width = "0%";
     }
+
+    // Sync speed dropdown from actual video state (catches native YouTube speed changes)
+    if (state.playbackSpeed && speedSelect) {
+        const currentSpeedVal = parseFloat(speedSelect.value);
+        if (Math.abs(currentSpeedVal - state.playbackSpeed) > 0.01) {
+            speedSelect.value = state.playbackSpeed;
+        }
+    }
+
+    // Sync volume dropdown from actual video state (catches native YouTube volume changes)
+    if (state.volume !== undefined && volumeSelect) {
+        // Find the closest option value
+        const options = Array.from(volumeSelect.options).map(o => parseFloat(o.value));
+        const closest = options.reduce((prev, curr) =>
+            Math.abs(curr - state.volume) < Math.abs(prev - state.volume) ? curr : prev
+        );
+        if (parseFloat(volumeSelect.value) !== closest) {
+            volumeSelect.value = closest;
+        }
+    }
 }
 
 function formatTime(seconds) {
@@ -385,6 +415,7 @@ if (amJumpForwardBtn) {
     });
 }
 
+let seekTimeout = null;
 amProgressBar.addEventListener('input', (e) => {
     const time = parseFloat(e.target.value);
 
@@ -393,10 +424,13 @@ amProgressBar.addEventListener('input', (e) => {
     const percent = (time / amProgressBar.max) * 100;
     amProgressFill.style.width = `${percent}%`;
 
-    // Send seek command
-    if (targetTabId) {
-        chrome.tabs.sendMessage(targetTabId, { action: 'seek', time: time });
-    }
+    // Debounce send seek command
+    clearTimeout(seekTimeout);
+    seekTimeout = setTimeout(() => {
+        if (targetTabId) {
+            chrome.tabs.sendMessage(targetTabId, { action: 'seek', time: time });
+        }
+    }, 200);
 });
 
 // ===== EXISTING LOGIC =====

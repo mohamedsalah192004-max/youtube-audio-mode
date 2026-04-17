@@ -158,5 +158,9 @@
     "speedNormal": {
         "message": "عادي",
         "description": "Label for normal speed (1x)"
+    },
+    "noVideo": {
+        "message": "لا يوجد فيديو يعمل حاليا",
+        "description": "Message shown when no video is currently active"
     }
 }

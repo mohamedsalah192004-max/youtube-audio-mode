@@ -445,6 +445,12 @@ kbd {
   flex-shrink: 0;
 }
 
+.text-btn {
+  text-decoration: none;
+  font-family: inherit;
+  font-size: 14px;
+}
+
 .icon-btn:hover {
   background: rgba(255, 255, 255, 0.2);
   color: white;
@@ -732,7 +738,6 @@ input[type="color"]::-webkit-color-swatch {
   backdrop-filter: blur(10px);
   border-radius: 16px;
   display: grid;
-  display: grid;
   grid-template-columns: auto 1fr;
   grid-template-rows: auto auto;
   align-items: center;
@@ -997,4 +1002,10 @@ input[type="color"]::-webkit-color-swatch {
   padding: 2px 6px;
   font-size: 11px;
   height: auto;
+}
+
+.speed-dropdown-wrapper {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }

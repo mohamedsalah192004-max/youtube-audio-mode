@@ -83,3 +83,42 @@ chrome.commands.onCommand.addListener((command) => {
         });
     }
 });
+
+// Handle YouTube navigation (new tabs and SPA navigation)
+function handleYouTubeNavigation(tabId, url) {
+    // Only handle watch pages
+    if (!url || !url.includes('youtube.com/watch')) return;
+
+    chrome.storage.sync.get(['audioMode'], (result) => {
+        if (result.audioMode) {
+            // Try to send message to existing content script
+            chrome.tabs.sendMessage(tabId, { action: 'getStatus' }, (response) => {
+                if (chrome.runtime.lastError) {
+                    // Content script not loaded, inject it
+                    console.log('[Audio Mode] Injecting content script for new navigation');
+                    chrome.scripting.executeScript({
+                        target: { tabId: tabId },
+                        files: ['content.js']
+                    }).catch(err => {
+                        console.log('[Audio Mode] Could not inject script:', err);
+                    });
+                }
+            });
+        }
+    });
+}
+
+// Listen for YouTube SPA navigation (when clicking videos within YouTube)
+chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
+    // Only handle main frame navigation
+    if (details.frameId === 0) {
+        handleYouTubeNavigation(details.tabId, details.url);
+    }
+}, { url: [{ hostContains: 'youtube.com' }] });
+
+// Listen for new tabs loading YouTube
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.status === 'complete' && tab.url?.includes('youtube.com/watch')) {
+        handleYouTubeNavigation(tabId, tab.url);
+    }
+});

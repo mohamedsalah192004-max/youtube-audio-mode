@@ -158,5 +158,9 @@
     "speedNormal": {
         "message": "Normal",
         "description": "Label for normal speed (1x)"
+    },
+    "noVideo": {
+        "message": "No Video Playing",
+        "description": "Message shown when no video is currently active"
     }
 }

@@ -1,15 +1,15 @@
 {
     "manifest_version": 3,
     "name": "__MSG_appName__",
-    "version": "2.0.1",
-    "version_name": "2.0.1",
+    "version": "2.1.0",
     "description": "__MSG_extDescription__",
     "default_locale": "en",
     "homepage_url": "https://github.com/Ahmed/youtube-audio-mode",
     "permissions": [
         "storage",
         "activeTab",
-        "scripting"
+        "scripting",
+        "webNavigation"
     ],
     "host_permissions": [
         "https://www.youtube.com/watch*"

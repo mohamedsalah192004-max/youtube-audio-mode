@@ -19,12 +19,13 @@
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
-  z-index: 999;
+  z-index: 1; /* Low enough to sit below YouTube's controls (.ytp-chrome-bottom ~35, .ytp-popup ~60) */
   color: white;
   margin: 0 !important;
   padding: 0 !important;
   transition: background 0.5s ease;
   font-family: "Cairo", sans-serif !important;
+  pointer-events: none; /* Allow clicks to pass through to YouTube controls */
 }
 
 #youtube-audio-mode-overlay[dir="rtl"] {
@@ -46,6 +47,7 @@
   text-align: center;
   animation: fadeIn 0.5s ease-in;
   z-index: 2;
+  pointer-events: auto; /* Re-enable clicks on the overlay content itself */
 }
 
 .audio-mode-content svg {
