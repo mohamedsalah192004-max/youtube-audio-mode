@@ -17,12 +17,13 @@ if (!window.__youtubeAudioModeLoaded) {
         API_VERIFICATION_DELAY: 500
     };
 
-
     const QUALITY = {
         TARGET: 'tiny',  // 144p
         FALLBACK: 'small',
         RESTORE: 'hd720' // 720p
     };
+
+    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
     // ===== STATE VARIABLES =====
     let audioModeEnabled = false;
@@ -38,20 +39,21 @@ if (!window.__youtubeAudioModeLoaded) {
     let isApplyingSpeed = false; // Debounce flag to prevent loops
     let userSetSpeed = false;
 
+    // Bi-directional Sync Variables
+    let isProgrammaticQualityChange = false;
+    let userManuallyChangedQuality = false;
+
     // Current language and loaded messages
     let loadedMessages = {};
 
     // Helper function to get translated messages
     function t(messageName) {
-        // First try to get from loaded messages (for custom language selection)
         if (loadedMessages[messageName] && loadedMessages[messageName].message) {
             return loadedMessages[messageName].message;
         }
-        // Fallback to chrome.i18n if not loaded yet
         return chrome.i18n.getMessage(messageName) || messageName;
     }
 
-    // Load messages for a specific language
     async function loadMessages(lang) {
         try {
             const url = chrome.runtime.getURL(`_locales/${lang}/messages.json`);
@@ -66,6 +68,42 @@ if (!window.__youtubeAudioModeLoaded) {
         }
     }
 
+    // Inject script to listen to YouTube's native player events safely
+    function injectYouTubeAPIHook() {
+        if (document.getElementById('am-yt-api-hook')) return;
+        const script = document.createElement('script');
+        script.id = 'am-yt-api-hook';
+        script.textContent = `
+            (function() {
+                let hooked = false;
+                function hookPlayer() {
+                    const player = document.getElementById('movie_player');
+                    if (player && player.addEventListener && !hooked) {
+                        player.addEventListener('onPlaybackQualityChange', (quality) => {
+                            window.postMessage({ type: 'AM_QUALITY_CHANGE', quality: quality }, '*');
+                        });
+                        hooked = true;
+                    }
+                }
+                hookPlayer();
+                document.addEventListener('yt-navigate-finish', hookPlayer);
+                setInterval(hookPlayer, 2000);
+            })();
+        `;
+        (document.head || document.documentElement).appendChild(script);
+    }
+
+    // Intercept API hook messages to detect manual interventions
+    window.addEventListener('message', (event) => {
+        if (event.source !== window || !event.data) return;
+        if (event.data.type === 'AM_QUALITY_CHANGE') {
+            if (!isProgrammaticQualityChange) {
+                console.log('[Audio Mode] User manually changed quality to', event.data.quality);
+                userManuallyChangedQuality = true;
+            }
+        }
+    });
+
     // Initialize by checking saved preference
     if (chrome.runtime?.id) {
         try {
@@ -75,21 +113,17 @@ if (!window.__youtubeAudioModeLoaded) {
                     return;
                 }
 
-                // Load language messages
                 if (result.language) {
                     await loadMessages(result.language);
                 } else {
-                    // Detect from browser
                     const detectedLang = chrome.i18n.getUILanguage().startsWith('ar') ? 'ar' : 'en';
                     await loadMessages(detectedLang);
                 }
 
-                // Enable audio mode if it was previously enabled
                 if (result.audioMode) {
                     enableAudioMode();
                 }
 
-                // Apply saved playback speed
                 if (result.userSetSpeed !== undefined && result.playbackSpeed) {
                     userSetSpeed = result.userSetSpeed;
                     currentPlaybackSpeed = result.playbackSpeed;
@@ -101,12 +135,6 @@ if (!window.__youtubeAudioModeLoaded) {
         }
     }
 
-    // ===== HELPER FUNCTIONS =====
-
-    /**
-     * Get cached video element or query for it
-     * Reduces DOM queries from 15+ to 1-2 per page
-     */
     function getVideoElement() {
         if (!cachedVideoElement || !document.contains(cachedVideoElement)) {
             cachedVideoElement = document.querySelector('video');
@@ -114,30 +142,24 @@ if (!window.__youtubeAudioModeLoaded) {
         return cachedVideoElement;
     }
 
-    /**
-     * Clear cached video element (useful after navigation)
-     */
     function clearVideoCache() {
         cachedVideoElement = null;
     }
 
-    /**
-     * Broadcast current playback state to the popup via chrome.runtime.sendMessage.
-     * This enables event-driven (push) sync instead of relying solely on polling.
-     * Failures are silently ignored (popup may not be open).
-     */
+    let _broadcastTimer = null;
     function broadcastPlaybackState() {
-        if (!chrome.runtime?.id) return;
-        const state = getPlaybackState();
-        if (!state) return;
-        try {
-            chrome.runtime.sendMessage({ action: 'playbackStateUpdate', state: state }).catch(() => { });
-        } catch (e) {
-            // Extension context invalidated — ignore
-        }
+        if (_broadcastTimer) return;
+        _broadcastTimer = setTimeout(() => {
+            _broadcastTimer = null;
+            if (!chrome.runtime?.id) return;
+            const state = getPlaybackState();
+            if (!state) return;
+            try {
+                chrome.runtime.sendMessage({ action: 'playbackStateUpdate', state }).catch(() => { });
+            } catch (e) { }
+        }, 250);
     }
 
-    /** Attach DOM video event listeners that push state to the popup in real-time. */
     let _videoPushListenersAttached = false;
     function attachVideoPushListeners() {
         const video = getVideoElement();
@@ -150,9 +172,7 @@ if (!window.__youtubeAudioModeLoaded) {
         });
     }
 
-    // Listen for messages from popup
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-
         if (request.action === 'toggleAudioMode') {
             if (audioModeEnabled) {
                 disableAudioMode();
@@ -172,7 +192,7 @@ if (!window.__youtubeAudioModeLoaded) {
             }).catch(err => {
                 sendResponse({ success: false, error: err.message });
             });
-            return true; // Keep message channel open for async response
+            return true;
         } else if (request.action === 'setPlaybackSpeed') {
             userSetSpeed = true;
             currentPlaybackSpeed = request.speed;
@@ -203,7 +223,6 @@ if (!window.__youtubeAudioModeLoaded) {
             const video = getVideoElement();
             if (video && request.volume !== undefined) {
                 video.volume = request.volume;
-                // Unmute if volume > 0 and was muted
                 if (request.volume > 0 && video.muted) {
                     video.muted = false;
                 }
@@ -222,10 +241,12 @@ if (!window.__youtubeAudioModeLoaded) {
     async function enableAudioMode(isRetry = false) {
         audioModeEnabled = true;
 
-        // Reset retry counter on fresh (non-retry) calls
-        if (!isRetry) enableRetries = 0;
+        if (!isRetry) {
+            enableRetries = 0;
+            userManuallyChangedQuality = false; // Reset bidirectional lock flag on activation
+            injectYouTubeAPIHook(); // Ensure hook logic is injected
+        }
 
-        // Find the video player
         const video = getVideoElement();
         if (!video) {
             if (enableRetries < 10) {
@@ -238,18 +259,10 @@ if (!window.__youtubeAudioModeLoaded) {
         }
         enableRetries = 0;
 
-        // Attach push listeners for real-time popup sync
         attachVideoPushListeners();
-
-        // Hide video visually but keep it full-size so YouTube's controls
-        // and settings popup continue to render properly
         video.style.opacity = '0';
-
-        // Create visual overlay first for immediate feedback
         await createAudioModeOverlay();
 
-        // Wait for video to start playing before setting quality
-        // This makes the transition much smoother
         const setQualityWhenReady = () => {
             if (video.readyState >= 2 && !video.paused) {
                 setLowestQuality();
@@ -262,7 +275,6 @@ if (!window.__youtubeAudioModeLoaded) {
                 };
                 video.addEventListener('play', playListener, { once: true });
 
-                // Also try after a timeout as fallback
                 setTimeout(() => {
                     if (audioModeEnabled) {
                         setLowestQuality();
@@ -273,7 +285,6 @@ if (!window.__youtubeAudioModeLoaded) {
 
         setQualityWhenReady();
 
-        // Save preference
         if (chrome.runtime?.id) {
             try {
                 chrome.storage.sync.set({ audioMode: true });
@@ -282,29 +293,24 @@ if (!window.__youtubeAudioModeLoaded) {
             }
         }
 
-        // Start tracking usage for data saved stats
         startUsageTracking();
     }
 
     function disableAudioMode() {
         audioModeEnabled = false;
 
-        // Find the video player
         const video = getVideoElement();
         if (video) {
             video.style.opacity = '1';
         }
 
-        // Restore quality settings
         restoreQuality();
 
-        // Reset quality attempt flag so we try fresh next time
         const player = document.getElementById('movie_player');
         if (player) {
             delete player.__audioModeQualityAttempted;
         }
 
-        // Clean up video event listeners (reuse video from above)
         if (video) {
             if (videoPlayHandler) {
                 video.removeEventListener('play', videoPlayHandler);
@@ -321,13 +327,11 @@ if (!window.__youtubeAudioModeLoaded) {
             }
         }
 
-        // Remove overlay
         if (audioModeOverlay) {
             audioModeOverlay.remove();
             audioModeOverlay = null;
         }
 
-        // Save preference
         if (chrome.runtime?.id) {
             try {
                 chrome.storage.sync.set({ audioMode: false });
@@ -336,212 +340,176 @@ if (!window.__youtubeAudioModeLoaded) {
             }
         }
 
-        // Clear quality check interval
         if (qualityCheckInterval) {
             clearInterval(qualityCheckInterval);
             qualityCheckInterval = null;
         }
 
-        // Stop tracking usage
         stopUsageTracking();
     }
 
     /**
      * Function to interact with YouTube's quality settings UI (invisibly)
-     * @param {HTMLVideoElement} video - The video element
-     * @param {string} targetText - The text to look for (e.g. '144p', '720p', 'Auto')
+     * Refactored: Implements robust Try/Finally block to assure elements are reset
      */
-    const clickQualitySetting = (video, targetText = '144p') => {
+    const clickQualitySetting = async (video, targetText = '144p') => {
+        if (userManuallyChangedQuality) return;
+
+        const wasPlaying = !video.paused;
+        const currentTime = video.currentTime;
+
+        const settingsPanel = document.querySelector('.ytp-settings-menu');
+        const popup = document.querySelector('.ytp-popup');
+
+        const originalPanelStyles = {};
+        const originalPopupStyles = {};
+
+        // Utility to restore visibility in the Finally block
+        const restoreUI = () => {
+            if (settingsPanel) {
+                settingsPanel.style.visibility = originalPanelStyles.visibility || '';
+                settingsPanel.style.opacity = originalPanelStyles.opacity || '';
+                settingsPanel.style.pointerEvents = originalPanelStyles.pointerEvents || '';
+            }
+            if (popup) {
+                popup.style.visibility = originalPopupStyles.visibility || '';
+                popup.style.opacity = originalPopupStyles.opacity || '';
+                popup.style.pointerEvents = originalPopupStyles.pointerEvents || '';
+            }
+            // Small delay to let the UI finish syncing before unlocking manual tracking
+            setTimeout(() => { isProgrammaticQualityChange = false; }, 500);
+        };
+
         try {
-            const wasPlaying = !video.paused;
-            const currentTime = video.currentTime;
+            isProgrammaticQualityChange = true;
 
-            // Hide the settings panel from view
-            const settingsPanel = document.querySelector('.ytp-settings-menu');
-            const popup = document.querySelector('.ytp-popup');
-
-            // Store original styles to restore later
-            const originalPanelStyles = {};
-            const originalPopupStyles = {};
-
+            // Make elements strictly invisible during manipulation
             if (settingsPanel) {
                 originalPanelStyles.visibility = settingsPanel.style.visibility;
                 originalPanelStyles.opacity = settingsPanel.style.opacity;
                 originalPanelStyles.pointerEvents = settingsPanel.style.pointerEvents;
-
-                // Make completely invisible
                 settingsPanel.style.visibility = 'hidden';
                 settingsPanel.style.opacity = '0';
                 settingsPanel.style.pointerEvents = 'none';
             }
-
             if (popup) {
                 originalPopupStyles.visibility = popup.style.visibility;
                 originalPopupStyles.opacity = popup.style.opacity;
                 originalPopupStyles.pointerEvents = popup.style.pointerEvents;
-
                 popup.style.visibility = 'hidden';
                 popup.style.opacity = '0';
                 popup.style.pointerEvents = 'none';
             }
 
             const settingsButton = document.querySelector('.ytp-settings-button');
-            if (settingsButton) {
-                settingsButton.click();
+            if (!settingsButton) return;
 
-                setTimeout(() => {
-                    const qualityMenuItem = Array.from(document.querySelectorAll('.ytp-menuitem')).find(
-                        item => item.textContent.toLowerCase().includes('quality')
-                    );
+            settingsButton.click();
+            await delay(150); // Pause for UI menu render
 
-                    if (qualityMenuItem) {
-                        qualityMenuItem.click();
+            const qualityMenuItem = Array.from(document.querySelectorAll('.ytp-menuitem')).find(
+                item => item.textContent.toLowerCase().includes('quality') || document.querySelector('.ytp-quality-menu')
+            );
 
-                        setTimeout(() => {
-                            const menuItems = Array.from(document.querySelectorAll('.ytp-menuitem'));
-                            const targetOption = menuItems.find(item => item.textContent.includes(targetText));
+            if (qualityMenuItem) {
+                qualityMenuItem.click();
+                await delay(300);
 
-                            if (targetOption) {
-                                targetOption.click();
-                            } else {
-                                if (targetText === '144p') {
-                                    const allQualities = document.querySelectorAll('.ytp-menuitem');
-                                    if (allQualities.length > 0) {
-                                        allQualities[allQualities.length - 1].click();
-                                    }
-                                }
-                                // If we were looking for 720p (restore), maybe try Auto?
-                                else if (targetText === '720p') {
-                                    const autoOption = menuItems.find(item => item.textContent.includes('Auto'));
-                                    if (autoOption) {
-                                        autoOption.click();
-                                    }
-                                }
-                            }
+                const menuItems = Array.from(document.querySelectorAll('.ytp-menuitem'));
+                const targetOption = menuItems.find(item => item.textContent.includes(targetText));
 
-                            // Close and cleanup
-                            setTimeout(() => {
-                                // Simulate Escape to close
-                                const escapeEvent = new KeyboardEvent('keydown', {
-                                    key: 'Escape',
-                                    code: 'Escape',
-                                    keyCode: 27,
-                                    which: 27,
-                                    bubbles: true,
-                                    cancelable: true
-                                });
-                                document.dispatchEvent(escapeEvent);
-
-                                // Restore original styles after a brief delay
-                                setTimeout(() => {
-                                    if (settingsPanel) {
-                                        settingsPanel.style.visibility = originalPanelStyles.visibility || '';
-                                        settingsPanel.style.opacity = originalPanelStyles.opacity || '';
-                                        settingsPanel.style.pointerEvents = originalPanelStyles.pointerEvents || '';
-                                    }
-
-                                    if (popup) {
-                                        popup.style.visibility = originalPopupStyles.visibility || '';
-                                        popup.style.opacity = originalPopupStyles.opacity || '';
-                                        popup.style.pointerEvents = originalPopupStyles.pointerEvents || '';
-                                    }
-
-                                    if (wasPlaying && video.paused) {
-                                        video.currentTime = currentTime;
-                                        video.play().catch(err => console.log('[Audio Mode] Could not resume:', err));
-                                    }
-                                }, 200);
-                            }, 100);
-                        }, 300);
+                if (targetOption) {
+                    targetOption.click();
+                } else {
+                    if (targetText === '144p' && menuItems.length > 0) {
+                        menuItems[menuItems.length - 1].click();
+                    } else if (targetText === '720p') {
+                        const autoOption = menuItems.find(item => item.textContent.includes('Auto'));
+                        if (autoOption) autoOption.click();
                     }
-                }, 300);
+                }
+
+                await delay(200);
+
+                // Simulate Escape event to properly close off DOM menus
+                const escapeEvent = new KeyboardEvent('keydown', {
+                    key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
+                });
+                document.dispatchEvent(escapeEvent);
             }
+
+            if (wasPlaying && video.paused) {
+                video.currentTime = currentTime;
+                video.play().catch(err => console.log('[Audio Mode] Could not resume:', err));
+            }
+
         } catch (error) {
             console.error('[Audio Mode] Error in invisible UI interaction:', error);
+        } finally {
+            // Restore visibility state no matter what happens in the Try block
+            restoreUI();
         }
     };
 
-    /**
-     * Function to force set quality to 144p using multiple methods
-     * @param {HTMLElement} player - The YouTube player element
-     * @param {HTMLVideoElement} video - The video element
-     */
     const forceLowestQuality = (player, video) => {
-        try {
-            // Save the current playback state
-            const wasPlaying = !video.paused;
-            const currentTime = video.currentTime;
+        if (userManuallyChangedQuality) return;
 
-            // Method 1: Try the standard API methods
-            const availableLevels = player.getAvailableQualityLevels ? player.getAvailableQualityLevels() : [];
+        try {
+            isProgrammaticQualityChange = true;
+            const wasPlaying = !video.paused;
 
             if (player.setPlaybackQuality) {
                 player.setPlaybackQuality('tiny');
             }
 
             if (player.setPlaybackQualityRange) {
-                // Clear any potential previous locks first?
-                // player.setPlaybackQualityRange('auto', 'auto'); 
-                // Lock to tiny
                 player.setPlaybackQualityRange('tiny', 'tiny');
             }
 
-            // Method 2: Try using internal YouTube methods
             if (typeof player.setInternalQuality === 'function') {
                 player.setInternalQuality('tiny');
             }
 
-            // Method 3: Directly set the quality using YouTube's internal state
             if (player.playerInfo && player.playerInfo.setPlaybackQuality) {
                 player.playerInfo.setPlaybackQuality('tiny');
             }
 
-            // Method 4: Disable auto quality by forcing preference
             if (player.setPreferredQuality) {
                 player.setPreferredQuality('tiny');
             }
 
-            // Wait a moment for quality to be applied
             setTimeout(() => {
-                // Verify current quality
                 const currentQuality = player.getPlaybackQuality ? player.getPlaybackQuality() : 'unknown';
-
-                // Only use UI interaction if API methods completely failed AND this is the first attempt
-                // Don't do UI interaction during periodic checks to avoid interrupting playback
                 const isFirstAttempt = !player.__audioModeQualityAttempted;
+
                 if (currentQuality !== 'tiny' && currentQuality !== 'small') {
                     if (isFirstAttempt) {
-                        console.log('[Audio Mode] API methods failed on first attempt, will try UI interaction...');
                         player.__audioModeQualityAttempted = true;
-                        // Use the generalized click function
                         clickQualitySetting(video, '144p');
+                        return; // Flag resets inside the click logic
                     }
                 } else {
                     player.__audioModeQualityAttempted = true;
                 }
 
-                // Restore playback state if it changed
+                setTimeout(() => { isProgrammaticQualityChange = false; }, 500);
+
                 if (wasPlaying && video.paused) {
                     video.play().catch(err => console.log('[Audio Mode] Could not resume playback:', err));
                 }
             }, 500);
 
         } catch (error) {
+            isProgrammaticQualityChange = false;
             console.error('[Audio Mode] Error setting quality:', error);
         }
     };
 
-    /**
-     * Restore quality to 720p (or auto if unavailable)
-     * Includes retry logic for reliability
-     * @param {number} attempts - Number of retry attempts remaining
-     */
     const restoreQuality = () => {
         const player = document.getElementById('movie_player');
         const video = getVideoElement();
 
         if (!player || !video) {
-            // Retry once to find the player
             setTimeout(() => {
                 const p = document.getElementById('movie_player');
                 const v = getVideoElement();
@@ -555,52 +523,76 @@ if (!window.__youtubeAudioModeLoaded) {
         doRestoreQuality(player, video);
     };
 
-    /**
-     * Actually perform the quality restoration
-     * Uses UI click for reliable instant restoration, then allows user control
-     */
     const doRestoreQuality = (player, video) => {
+        isProgrammaticQualityChange = true;
+        userManuallyChangedQuality = false;
+
         try {
             const availableLevels = player.getAvailableQualityLevels ? player.getAvailableQualityLevels() : [];
-
             let target = QUALITY.RESTORE;
             let uiTargetText = '720p';
 
-            // If 720p is not available, fallback to auto
             if (availableLevels.length > 0 && !availableLevels.includes(QUALITY.RESTORE)) {
                 target = 'auto';
                 uiTargetText = 'Auto';
             }
 
-            // Step 1: Clear any quality range locks to restore user control
             if (player.setPlaybackQualityRange) {
                 player.setPlaybackQualityRange('auto', 'auto');
             }
 
-            // Step 2: Try API methods first (they're fast and work sometimes)
             if (player.setPlaybackQuality) {
                 player.setPlaybackQuality(target);
             }
 
-            // Step 3: Use UI click for reliable instant restoration
-            // This is a one-time action, not an ongoing enforcement
-            clickQualitySetting(video, uiTargetText);
-
-            // User now has full control - no further enforcement
-
+            clickQualitySetting(video, uiTargetText); // handles resetting isProgrammaticQualityChange
         } catch (e) {
+            isProgrammaticQualityChange = false;
             console.error('[Audio Mode] Error restoring quality:', e);
         }
     };
 
+    let pendingStats = { listened: 0, active: 0 };
+    const FLUSH_INTERVAL = 30000;
+    const RETENTION_DAYS = 90;
+
+    function pruneOldEntries(obj) {
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - RETENTION_DAYS);
+        const cutoffStr = cutoff.toISOString().split('T')[0];
+        for (const key of Object.keys(obj)) {
+            if (key < cutoffStr) delete obj[key];
+        }
+    }
+
+    function flushStatsToStorage() {
+        if (pendingStats.listened === 0 && pendingStats.active === 0) return;
+        if (!chrome.runtime?.id || !chrome.storage?.local) return;
+
+        const today = new Date().toISOString().split('T')[0];
+        const toFlush = { ...pendingStats };
+        pendingStats.listened = 0;
+        pendingStats.active = 0;
+
+        chrome.storage.local.get(['statsLogs', 'activeLogs'], (result) => {
+            if (chrome.runtime.lastError) return;
+            const statsLogs = result.statsLogs || {};
+            const activeLogs = result.activeLogs || {};
+
+            statsLogs[today] = (statsLogs[today] || 0) + toFlush.listened;
+            activeLogs[today] = (activeLogs[today] || 0) + toFlush.active;
+
+            pruneOldEntries(statsLogs);
+            pruneOldEntries(activeLogs);
+
+            chrome.storage.local.set({ statsLogs, activeLogs });
+        });
+    }
+
     function startUsageTracking() {
         if (usageTrackingInterval) return;
 
-        let qualityCheckCounter = 0;
-
-        // Consolidated monitoring interval (runs every 5 seconds)
         usageTrackingInterval = setInterval(() => {
-            // Safety check: Stop if extension context is invalidated (e.g. after update/reload)
             if (!chrome.runtime?.id) {
                 clearInterval(usageTrackingInterval);
                 usageTrackingInterval = null;
@@ -608,65 +600,32 @@ if (!window.__youtubeAudioModeLoaded) {
             }
 
             const video = getVideoElement();
-            // Check if video exists and audio mode is actually enabled
             if (!audioModeEnabled || !video) return;
 
-            const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+            pendingStats.active += 5;
 
-            if (!chrome.storage || !chrome.storage.local) return;
-
-            // TRACK 1: Usage statistics (every cycle)
-            chrome.storage.local.get(['statsLogs', 'activeLogs'], (result) => {
-                const statsLogs = result.statsLogs || {};
-                const activeLogs = result.activeLogs || {};
-
-                // Initialize today's entry if missing
-                if (!statsLogs[today]) statsLogs[today] = 0;
-                if (!activeLogs[today]) activeLogs[today] = 0;
-
-                // TRACK Active Time (Wall clock time while mode is ON)
-                activeLogs[today] += 5;
-
-                // TRACK Audio Listened / Data Saved (Only if playing)
-                let isPlaying = false;
-                if (video && !video.paused && !video.ended && video.readyState > 2) {
-                    isPlaying = true;
-                    statsLogs[today] += 5;
-                }
-
-                // Save back
-                chrome.storage.local.set({
-                    statsLogs: statsLogs,
-                    activeLogs: activeLogs
-                });
-            });
-
-            // TRACK 2: Quality enforcement (every other cycle to reduce overhead)
-            qualityCheckCounter++;
-            if (qualityCheckCounter >= 2) {
-                qualityCheckCounter = 0;
-                checkAndEnforceQuality();
+            if (!video.paused && !video.ended && video.readyState > 2) {
+                pendingStats.listened += 5;
             }
         }, TIMING.USAGE_TRACKING_INTERVAL);
+
+        qualityCheckInterval = setInterval(flushStatsToStorage, FLUSH_INTERVAL);
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) flushStatsToStorage();
+        });
     }
 
     function stopUsageTracking() {
+        flushStatsToStorage();
         if (usageTrackingInterval) {
             clearInterval(usageTrackingInterval);
             usageTrackingInterval = null;
         }
-    }
-
-    /**
-     * Check and enforce quality settings
-     * Now only used for initial setup and video changes, not continuous enforcement
-     * This allows users to access YouTube settings and change quality if desired
-     */
-    function checkAndEnforceQuality() {
-        // Quality enforcement is now disabled during normal playback
-        // Quality is only set once when audio mode is enabled or when video changes
-        // This allows users to access YouTube settings and change quality manually
-        return;
+        if (qualityCheckInterval) {
+            clearInterval(qualityCheckInterval);
+            qualityCheckInterval = null;
+        }
     }
 
     let setQualityRetries = 0;
@@ -685,11 +644,8 @@ if (!window.__youtubeAudioModeLoaded) {
         }
         setQualityRetries = 0;
 
-        // Use the global function
         forceLowestQuality(player, video);
 
-        // Fallback: Also try the UI click directly if it's the very first time and video is playing
-        // (This is an extra safety layer for the "Manual" case the user reported)
         if (!player.__audioModeQualityAttempted && !video.paused) {
             setTimeout(() => {
                 const q = player.getPlaybackQuality ? player.getPlaybackQuality() : '';
@@ -702,21 +658,17 @@ if (!window.__youtubeAudioModeLoaded) {
     }
 
     async function createAudioModeOverlay() {
-        // Ensure messages are loaded for current language
         await loadMessages(currentLanguage);
 
-        // Remove existing overlay if any
         if (audioModeOverlay) {
             audioModeOverlay.remove();
         }
 
-        // Find the video container
         const videoContainer = document.querySelector('.html5-video-container') ||
             document.querySelector('#player-container');
 
         if (!videoContainer) return;
 
-        // Create overlay element
         audioModeOverlay = document.createElement('div');
         audioModeOverlay.id = 'youtube-audio-mode-overlay';
 
@@ -735,28 +687,19 @@ if (!window.__youtubeAudioModeLoaded) {
     </div>
     `;
 
-        // Safely set text content to prevent XSS
         audioModeOverlay.querySelector('#am-overlay-title').textContent = t('activeTitle');
         audioModeOverlay.querySelector('#am-overlay-desc').textContent = t('activeDesc');
 
-
-
-        // CSS is now loaded from overlay.css via manifest.json
-        // No need to inject styles dynamically
-
-        // Ensure the parent container has proper positioning
         videoContainer.style.position = 'relative';
         videoContainer.style.width = '100%';
         videoContainer.style.height = '100%';
 
         videoContainer.appendChild(audioModeOverlay);
 
-        // Apply RTL if needed
         if (currentLanguage === 'ar') {
             audioModeOverlay.setAttribute('dir', 'rtl');
         }
 
-        // Apply saved theme
         if (chrome.runtime?.id) {
             try {
                 chrome.storage.sync.get(['backgroundType', 'backgroundValue'], (result) => {
@@ -769,17 +712,14 @@ if (!window.__youtubeAudioModeLoaded) {
             }
         }
 
-        // Add play/pause listeners to control animation and button state
         const video = getVideoElement();
         const visualizer = audioModeOverlay.querySelector('.audio-visualizer');
 
         if (video && visualizer) {
-            // Initial State
             if (video.paused) {
                 visualizer.classList.add('paused');
             }
 
-            // Logic Helpers
             const updatePlayState = () => {
                 if (video.paused) {
                     visualizer.classList.add('paused');
@@ -788,10 +728,9 @@ if (!window.__youtubeAudioModeLoaded) {
                 }
             };
 
-            // Event Listeners
             videoPlayHandler = updatePlayState;
             videoPauseHandler = updatePlayState;
-            videoTimeUpdateHandler = null; // No longer needed for overlay
+            videoTimeUpdateHandler = null;
 
             video.addEventListener('play', videoPlayHandler);
             video.addEventListener('pause', videoPauseHandler);
@@ -826,12 +765,9 @@ if (!window.__youtubeAudioModeLoaded) {
         }
     }
 
-
     async function updateOverlayLanguage() {
-        // Load messages for the new language
         await loadMessages(currentLanguage);
 
-        // If overlay exists, update its text content only (don't recreate)
         if (audioModeOverlay) {
             const title = audioModeOverlay.querySelector('#am-overlay-title');
             const desc = audioModeOverlay.querySelector('#am-overlay-desc');
@@ -839,7 +775,6 @@ if (!window.__youtubeAudioModeLoaded) {
             if (title) title.textContent = t('activeTitle');
             if (desc) desc.textContent = t('activeDesc');
 
-            // Update RTL direction
             if (currentLanguage === 'ar') {
                 audioModeOverlay.setAttribute('dir', 'rtl');
             } else {
@@ -848,16 +783,13 @@ if (!window.__youtubeAudioModeLoaded) {
         }
     }
 
-
     function applyPlaybackSpeed() {
         if (!userSetSpeed) return;
         const video = getVideoElement();
         if (video && !isApplyingSpeed) {
-            // Check if speed actually needs to change to avoid unnecessary updates
             if (Math.abs(video.playbackRate - currentPlaybackSpeed) > 0.01) {
                 isApplyingSpeed = true;
                 video.playbackRate = currentPlaybackSpeed;
-                // Reset flag after a short delay
                 setTimeout(() => {
                     isApplyingSpeed = false;
                 }, 100);
@@ -865,7 +797,6 @@ if (!window.__youtubeAudioModeLoaded) {
         }
     }
 
-    // Helper to extract playback state for popup
     function getPlaybackState() {
         const video = getVideoElement();
         if (!video) return null;
@@ -875,7 +806,6 @@ if (!window.__youtubeAudioModeLoaded) {
         let videoId = null;
 
         try {
-            // Try getting title from document or page elements
             const titleEl = document.querySelector("#title h1") ||
                 document.querySelector(".ytd-video-primary-info-renderer h1") ||
                 document.querySelector("h1.title");
@@ -886,21 +816,18 @@ if (!window.__youtubeAudioModeLoaded) {
                 videoTitle = document.title.replace(" - YouTube", "");
             }
 
-            // Try getting channel name
             const channelEl = document.querySelector("#upload-info #channel-name a") ||
                 document.querySelector("ytd-channel-name a");
             if (channelEl) {
                 channelName = channelEl.textContent.trim();
             }
 
-            // Get Video ID from URL
             const urlParams = new URLSearchParams(window.location.search);
             videoId = urlParams.get('v');
         } catch (e) {
             console.log("Error fetching metadata", e);
         }
 
-        // Thumbnail URL (HQ)
         const thumbnailUrl = videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '';
 
         return {
@@ -916,8 +843,6 @@ if (!window.__youtubeAudioModeLoaded) {
         };
     }
 
-    // Handle YouTube's SPA navigation using YouTube's custom event.
-    // This replaces the costly MutationObserver that fired hundreds of times per second.
     let lastUrl = location.href;
 
     function handleNavigation() {
@@ -925,30 +850,21 @@ if (!window.__youtubeAudioModeLoaded) {
         if (url !== lastUrl) {
             lastUrl = url;
             clearVideoCache();
-            _videoPushListenersAttached = false; // Reset so listeners attach to new video
+            _videoPushListenersAttached = false;
 
             if (audioModeEnabled) {
-                // Re-apply audio mode after navigation
                 setTimeout(() => {
                     enableAudioMode();
                 }, TIMING.RETRY_DELAY);
             }
 
-            // Re-attach push listeners for the new video element
             setTimeout(attachVideoPushListeners, TIMING.RETRY_DELAY + 500);
         }
     }
 
     function initNavigationObserver() {
-        // Use YouTube's native SPA navigation event (far more efficient than MutationObserver)
         document.addEventListener('yt-navigate-finish', handleNavigation);
-
-        // Fallback: popstate catches browser back/forward
         window.addEventListener('popstate', handleNavigation);
-
-        // Robust playback speed enforcement
-        // YouTube resets playbackRate on video load, quality change, ads, and navigation.
-        // We listen to multiple events to ensure our speed persists.
 
         const speedEnforcementEvents = ['play', 'loadedmetadata', 'loadeddata', 'canplay'];
 
@@ -956,21 +872,16 @@ if (!window.__youtubeAudioModeLoaded) {
             document.addEventListener(eventName, (e) => {
                 if (!userSetSpeed) return;
                 if (e.target.tagName === 'VIDEO') {
-                    // Apply speed with a small delay to let YouTube finish its initialization
                     setTimeout(applyPlaybackSpeed, 150);
                 }
             });
         });
 
-        // Re-apply on 'ratechange' if it wasn't triggered by us
         document.addEventListener('ratechange', (e) => {
             if (!userSetSpeed) return;
             if (e.target.tagName === 'VIDEO' && !isApplyingSpeed) {
-                // Check if the rate differs from our target
                 if (Math.abs(e.target.playbackRate - currentPlaybackSpeed) > 0.01) {
-                    // Use a short timeout to avoid fighting with YouTube's internal changes
                     setTimeout(() => {
-                        // Double-check the rate is still different (YouTube might have settled)
                         const video = getVideoElement();
                         if (video && Math.abs(video.playbackRate - currentPlaybackSpeed) > 0.01) {
                             applyPlaybackSpeed();
@@ -981,15 +892,12 @@ if (!window.__youtubeAudioModeLoaded) {
         });
     }
 
-    // Initialize observer
     initNavigationObserver();
 
-    // Attach push listeners on initial page load
     setTimeout(attachVideoPushListeners, 1500);
 
-    // Cleanup on extension unload
     window.addEventListener('beforeunload', () => {
         stopUsageTracking();
     });
 
-} // End of __youtubeAudioModeLoaded check
+}

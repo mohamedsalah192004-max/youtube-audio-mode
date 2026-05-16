@@ -47,7 +47,8 @@
   text-align: center;
   animation: fadeIn 0.5s ease-in;
   z-index: 2;
-  pointer-events: auto; /* Re-enable clicks on the overlay content itself */
+  pointer-events: none; /* Re-disabled so clicks pass through to YouTube controls */
+  padding-bottom: 80px; /* Keep visuals clear of the bottom bar */
 }
 
 .audio-mode-content svg {
@@ -137,6 +138,13 @@
   50% {
     height: 30px;
   }
+}
+
+/* Ensure YouTube's native controls stay strictly on top */
+.html5-video-player .ytp-chrome-bottom,
+.html5-video-player .ytp-settings-menu,
+.html5-video-player .ytp-popup {
+  z-index: 100 !important;
 }
 
 /* Music Player Interface */
