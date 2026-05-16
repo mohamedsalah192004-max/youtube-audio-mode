@@ -66,7 +66,8 @@
                 "overlay.css",
                 "fonts/Cairo-Variable.ttf",
                 "_locales/en/messages.json",
-                "_locales/ar/messages.json"
+                "_locales/ar/messages.json",
+                "inject.js"
             ],
             "matches": [
                 "https://www.youtube.com/*"

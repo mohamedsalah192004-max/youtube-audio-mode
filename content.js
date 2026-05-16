@@ -14,7 +14,8 @@ if (!window.__youtubeAudioModeLoaded) {
         UI_INTERACTION_BASE: 300,
         UI_INTERACTION_STEP: 100,
         UI_INTERACTION_FINAL: 200,
-        API_VERIFICATION_DELAY: 500
+        API_VERIFICATION_DELAY: 500,
+        LOCK_DURATION: 7000 // 7 seconds grace period for programmatic changes
     };
 
     const QUALITY = {
@@ -36,17 +37,24 @@ if (!window.__youtubeAudioModeLoaded) {
     let videoPauseHandler = null;
     let videoTimeUpdateHandler = null;
     let currentPlaybackSpeed = 1;
-    let isApplyingSpeed = false; // Debounce flag to prevent loops
+    let isApplyingSpeed = false;
     let userSetSpeed = false;
 
     // Bi-directional Sync Variables
-    let isProgrammaticQualityChange = false;
+    let programmaticQualityLock = 0;
     let userManuallyChangedQuality = false;
 
-    // Current language and loaded messages
+    // Utility to lock manual detection during automated changes
+    function setProgrammaticLock() {
+        programmaticQualityLock = Date.now();
+    }
+
+    function isQualityLocked() {
+        return (Date.now() - programmaticQualityLock) < TIMING.LOCK_DURATION;
+    }
+
     let loadedMessages = {};
 
-    // Helper function to get translated messages
     function t(messageName) {
         if (loadedMessages[messageName] && loadedMessages[messageName].message) {
             return loadedMessages[messageName].message;
@@ -68,50 +76,28 @@ if (!window.__youtubeAudioModeLoaded) {
         }
     }
 
-    // Inject script to listen to YouTube's native player events safely
+    // Safely inject API hook via external file to bypass MV3 CSP
     function injectYouTubeAPIHook() {
         if (document.getElementById('am-yt-api-hook')) return;
         const script = document.createElement('script');
         script.id = 'am-yt-api-hook';
-        script.textContent = `
-            (function() {
-                let hooked = false;
-                function hookPlayer() {
-                    const player = document.getElementById('movie_player');
-                    if (player && player.addEventListener && !hooked) {
-                        player.addEventListener('onPlaybackQualityChange', (quality) => {
-                            window.postMessage({ type: 'AM_QUALITY_CHANGE', quality: quality }, '*');
-                        });
-                        hooked = true;
-                    }
-                }
-                hookPlayer();
-                document.addEventListener('yt-navigate-finish', hookPlayer);
-                setInterval(hookPlayer, 2000);
-            })();
-        `;
+        script.src = chrome.runtime.getURL('inject.js');
         (document.head || document.documentElement).appendChild(script);
     }
 
-    // Intercept API hook messages to detect manual interventions
     window.addEventListener('message', (event) => {
         if (event.source !== window || !event.data) return;
         if (event.data.type === 'AM_QUALITY_CHANGE') {
-            if (!isProgrammaticQualityChange) {
-                console.log('[Audio Mode] User manually changed quality to', event.data.quality);
-                userManuallyChangedQuality = true;
-            }
+            if (isQualityLocked()) return;
+            console.log('[Audio Mode] User manually changed quality to', event.data.quality);
+            userManuallyChangedQuality = true;
         }
     });
 
-    // Initialize by checking saved preference
     if (chrome.runtime?.id) {
         try {
             chrome.storage.sync.get(['audioMode', 'language', 'playbackSpeed', 'userSetSpeed'], async function (result) {
-                if (chrome.runtime.lastError) {
-                    console.log('[Audio Mode] Could not load initial state:', chrome.runtime.lastError);
-                    return;
-                }
+                if (chrome.runtime.lastError) return;
 
                 if (result.language) {
                     await loadMessages(result.language);
@@ -120,9 +106,7 @@ if (!window.__youtubeAudioModeLoaded) {
                     await loadMessages(detectedLang);
                 }
 
-                if (result.audioMode) {
-                    enableAudioMode();
-                }
+                if (result.audioMode) enableAudioMode();
 
                 if (result.userSetSpeed !== undefined && result.playbackSpeed) {
                     userSetSpeed = result.userSetSpeed;
@@ -174,11 +158,8 @@ if (!window.__youtubeAudioModeLoaded) {
 
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.action === 'toggleAudioMode') {
-            if (audioModeEnabled) {
-                disableAudioMode();
-            } else {
-                enableAudioMode();
-            }
+            if (audioModeEnabled) disableAudioMode();
+            else enableAudioMode();
             sendResponse({ enabled: audioModeEnabled });
         } else if (request.action === 'getStatus') {
             sendResponse({ enabled: audioModeEnabled });
@@ -187,11 +168,8 @@ if (!window.__youtubeAudioModeLoaded) {
             sendResponse({ success: true });
         } else if (request.action === 'updateLanguage') {
             currentLanguage = request.language;
-            updateOverlayLanguage().then(() => {
-                sendResponse({ success: true });
-            }).catch(err => {
-                sendResponse({ success: false, error: err.message });
-            });
+            updateOverlayLanguage().then(() => sendResponse({ success: true }))
+                .catch(err => sendResponse({ success: false, error: err.message }));
             return true;
         } else if (request.action === 'setPlaybackSpeed') {
             userSetSpeed = true;
@@ -202,49 +180,38 @@ if (!window.__youtubeAudioModeLoaded) {
             sendResponse(getPlaybackState());
         } else if (request.action === 'togglePlayback') {
             const video = getVideoElement();
-            if (video) {
-                if (video.paused) video.play();
-                else video.pause();
-            }
+            if (video) video.paused ? video.play() : video.pause();
             sendResponse({ success: true });
         } else if (request.action === 'seek') {
             const video = getVideoElement();
-            if (video && request.time !== undefined) {
-                video.currentTime = request.time;
-            }
+            if (video && request.time !== undefined) video.currentTime = request.time;
             sendResponse({ success: true });
         } else if (request.action === 'seekBy') {
             const video = getVideoElement();
-            if (video && request.offset !== undefined) {
-                video.currentTime += request.offset;
-            }
+            if (video && request.offset !== undefined) video.currentTime += request.offset;
             sendResponse({ success: true });
         } else if (request.action === 'setVolume') {
             const video = getVideoElement();
             if (video && request.volume !== undefined) {
                 video.volume = request.volume;
-                if (request.volume > 0 && video.muted) {
-                    video.muted = false;
-                }
+                if (request.volume > 0 && video.muted) video.muted = false;
             }
             sendResponse({ success: true });
         } else if (request.action === 'getVolume') {
             const video = getVideoElement();
-            sendResponse({
-                volume: video ? video.volume : 1,
-                muted: video ? video.muted : false
-            });
+            sendResponse({ volume: video ? video.volume : 1, muted: video ? video.muted : false });
         }
     });
 
     let enableRetries = 0;
     async function enableAudioMode(isRetry = false) {
         audioModeEnabled = true;
+        setProgrammaticLock();
 
         if (!isRetry) {
             enableRetries = 0;
-            userManuallyChangedQuality = false; // Reset bidirectional lock flag on activation
-            injectYouTubeAPIHook(); // Ensure hook logic is injected
+            userManuallyChangedQuality = false;
+            injectYouTubeAPIHook();
         }
 
         const video = getVideoElement();
@@ -252,8 +219,6 @@ if (!window.__youtubeAudioModeLoaded) {
             if (enableRetries < 10) {
                 enableRetries++;
                 setTimeout(() => enableAudioMode(true), TIMING.RETRY_DELAY);
-            } else {
-                console.log('[Audio Mode] Max retries reached, could not find video');
             }
             return;
         }
@@ -276,9 +241,7 @@ if (!window.__youtubeAudioModeLoaded) {
                 video.addEventListener('play', playListener, { once: true });
 
                 setTimeout(() => {
-                    if (audioModeEnabled) {
-                        setLowestQuality();
-                    }
+                    if (audioModeEnabled) setLowestQuality();
                 }, TIMING.FALLBACK_TIMEOUT);
             }
         };
@@ -286,30 +249,20 @@ if (!window.__youtubeAudioModeLoaded) {
         setQualityWhenReady();
 
         if (chrome.runtime?.id) {
-            try {
-                chrome.storage.sync.set({ audioMode: true });
-            } catch (error) {
-                console.log('[Audio Mode] Could not save state:', error);
-            }
+            try { chrome.storage.sync.set({ audioMode: true }); } catch (e) { }
         }
-
         startUsageTracking();
     }
 
     function disableAudioMode() {
         audioModeEnabled = false;
-
         const video = getVideoElement();
-        if (video) {
-            video.style.opacity = '1';
-        }
+        if (video) video.style.opacity = '1';
 
         restoreQuality();
 
         const player = document.getElementById('movie_player');
-        if (player) {
-            delete player.__audioModeQualityAttempted;
-        }
+        if (player) delete player.__audioModeQualityAttempted;
 
         if (video) {
             if (videoPlayHandler) {
@@ -333,24 +286,18 @@ if (!window.__youtubeAudioModeLoaded) {
         }
 
         if (chrome.runtime?.id) {
-            try {
-                chrome.storage.sync.set({ audioMode: false });
-            } catch (error) {
-                console.log('[Audio Mode] Could not save state:', error);
-            }
+            try { chrome.storage.sync.set({ audioMode: false }); } catch (e) { }
         }
 
         if (qualityCheckInterval) {
             clearInterval(qualityCheckInterval);
             qualityCheckInterval = null;
         }
-
         stopUsageTracking();
     }
 
     /**
-     * Function to interact with YouTube's quality settings UI (invisibly)
-     * Refactored: Implements robust Try/Finally block to assure elements are reset
+     * UI Clicker: Multilingual & Regex-based
      */
     const clickQualitySetting = async (video, targetText = '144p') => {
         if (userManuallyChangedQuality) return;
@@ -364,7 +311,6 @@ if (!window.__youtubeAudioModeLoaded) {
         const originalPanelStyles = {};
         const originalPopupStyles = {};
 
-        // Utility to restore visibility in the Finally block
         const restoreUI = () => {
             if (settingsPanel) {
                 settingsPanel.style.visibility = originalPanelStyles.visibility || '';
@@ -376,14 +322,12 @@ if (!window.__youtubeAudioModeLoaded) {
                 popup.style.opacity = originalPopupStyles.opacity || '';
                 popup.style.pointerEvents = originalPopupStyles.pointerEvents || '';
             }
-            // Small delay to let the UI finish syncing before unlocking manual tracking
-            setTimeout(() => { isProgrammaticQualityChange = false; }, 500);
+            setTimeout(() => { programmaticQualityLock = Date.now(); }, 500);
         };
 
         try {
-            isProgrammaticQualityChange = true;
+            setProgrammaticLock();
 
-            // Make elements strictly invisible during manipulation
             if (settingsPanel) {
                 originalPanelStyles.visibility = settingsPanel.style.visibility;
                 originalPanelStyles.opacity = settingsPanel.style.opacity;
@@ -405,11 +349,17 @@ if (!window.__youtubeAudioModeLoaded) {
             if (!settingsButton) return;
 
             settingsButton.click();
-            await delay(150); // Pause for UI menu render
+            await delay(150);
 
-            const qualityMenuItem = Array.from(document.querySelectorAll('.ytp-menuitem')).find(
-                item => item.textContent.toLowerCase().includes('quality') || document.querySelector('.ytp-quality-menu')
-            );
+            // Multilingual detection: Find the menu item based on common strings or regex matching resolutions (e.g. 480p)
+            const qualityMenuItem = Array.from(document.querySelectorAll('.ytp-menuitem')).find(item => {
+                const text = item.textContent.toLowerCase();
+                return text.includes('quality') ||
+                    text.includes('الجودة') ||
+                    text.includes('calidad') ||
+                    text.includes('qualité') ||
+                    text.match(/\d{3,4}p/);
+            });
 
             if (qualityMenuItem) {
                 qualityMenuItem.click();
@@ -419,19 +369,29 @@ if (!window.__youtubeAudioModeLoaded) {
                 const targetOption = menuItems.find(item => item.textContent.includes(targetText));
 
                 if (targetOption) {
+                    setProgrammaticLock();
                     targetOption.click();
                 } else {
                     if (targetText === '144p' && menuItems.length > 0) {
-                        menuItems[menuItems.length - 1].click();
+                        setProgrammaticLock();
+                        // Find the last item that has a 'p' (which is structurally the lowest resolution)
+                        const pOptions = menuItems.filter(item => item.textContent.match(/\d{3,4}p/));
+                        if (pOptions.length > 0) {
+                            pOptions[pOptions.length - 1].click();
+                        } else {
+                            menuItems[menuItems.length - 1].click();
+                        }
                     } else if (targetText === '720p') {
-                        const autoOption = menuItems.find(item => item.textContent.includes('Auto'));
-                        if (autoOption) autoOption.click();
+                        const autoOption = menuItems.find(item => item.textContent.includes('Auto') || item.textContent.includes('تلقائية'));
+                        if (autoOption) {
+                            setProgrammaticLock();
+                            autoOption.click();
+                        }
                     }
                 }
 
                 await delay(200);
 
-                // Simulate Escape event to properly close off DOM menus
                 const escapeEvent = new KeyboardEvent('keydown', {
                     key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true
                 });
@@ -446,7 +406,6 @@ if (!window.__youtubeAudioModeLoaded) {
         } catch (error) {
             console.error('[Audio Mode] Error in invisible UI interaction:', error);
         } finally {
-            // Restore visibility state no matter what happens in the Try block
             restoreUI();
         }
     };
@@ -454,30 +413,37 @@ if (!window.__youtubeAudioModeLoaded) {
     const forceLowestQuality = (player, video) => {
         if (userManuallyChangedQuality) return;
 
+        const applyAPI = () => {
+            try {
+                if (player.setPlaybackQualityRange) player.setPlaybackQualityRange('tiny', 'tiny');
+                if (player.setPlaybackQuality) player.setPlaybackQuality('tiny');
+                if (typeof player.setInternalQuality === 'function') player.setInternalQuality('tiny');
+                if (player.playerInfo && player.playerInfo.setPlaybackQuality) player.playerInfo.setPlaybackQuality('tiny');
+            } catch (e) { }
+        }
+
         try {
-            isProgrammaticQualityChange = true;
+            setProgrammaticLock();
             const wasPlaying = !video.paused;
 
-            if (player.setPlaybackQuality) {
-                player.setPlaybackQuality('tiny');
-            }
+            // Apply immediately
+            applyAPI();
 
-            if (player.setPlaybackQualityRange) {
-                player.setPlaybackQualityRange('tiny', 'tiny');
-            }
+            // Aggressively re-apply for 2 seconds to defeat YouTube's startup adaptive engine
+            let attempts = 0;
+            const aggressiveLock = setInterval(() => {
+                if (userManuallyChangedQuality || attempts > 4) {
+                    clearInterval(aggressiveLock);
+                    return;
+                }
+                const currentQuality = player.getPlaybackQuality ? player.getPlaybackQuality() : 'unknown';
+                if (currentQuality !== 'tiny' && currentQuality !== 'small') {
+                    applyAPI();
+                }
+                attempts++;
+            }, 500);
 
-            if (typeof player.setInternalQuality === 'function') {
-                player.setInternalQuality('tiny');
-            }
-
-            if (player.playerInfo && player.playerInfo.setPlaybackQuality) {
-                player.playerInfo.setPlaybackQuality('tiny');
-            }
-
-            if (player.setPreferredQuality) {
-                player.setPreferredQuality('tiny');
-            }
-
+            // Give API 2.5 seconds to settle before attempting the UI click fallback
             setTimeout(() => {
                 const currentQuality = player.getPlaybackQuality ? player.getPlaybackQuality() : 'unknown';
                 const isFirstAttempt = !player.__audioModeQualityAttempted;
@@ -486,21 +452,18 @@ if (!window.__youtubeAudioModeLoaded) {
                     if (isFirstAttempt) {
                         player.__audioModeQualityAttempted = true;
                         clickQualitySetting(video, '144p');
-                        return; // Flag resets inside the click logic
+                        return;
                     }
                 } else {
                     player.__audioModeQualityAttempted = true;
                 }
 
-                setTimeout(() => { isProgrammaticQualityChange = false; }, 500);
-
                 if (wasPlaying && video.paused) {
                     video.play().catch(err => console.log('[Audio Mode] Could not resume playback:', err));
                 }
-            }, 500);
+            }, 2500);
 
         } catch (error) {
-            isProgrammaticQualityChange = false;
             console.error('[Audio Mode] Error setting quality:', error);
         }
     };
@@ -513,9 +476,7 @@ if (!window.__youtubeAudioModeLoaded) {
             setTimeout(() => {
                 const p = document.getElementById('movie_player');
                 const v = getVideoElement();
-                if (p && v) {
-                    doRestoreQuality(p, v);
-                }
+                if (p && v) doRestoreQuality(p, v);
             }, 200);
             return;
         }
@@ -524,7 +485,7 @@ if (!window.__youtubeAudioModeLoaded) {
     };
 
     const doRestoreQuality = (player, video) => {
-        isProgrammaticQualityChange = true;
+        setProgrammaticLock();
         userManuallyChangedQuality = false;
 
         try {
@@ -537,17 +498,11 @@ if (!window.__youtubeAudioModeLoaded) {
                 uiTargetText = 'Auto';
             }
 
-            if (player.setPlaybackQualityRange) {
-                player.setPlaybackQualityRange('auto', 'auto');
-            }
+            if (player.setPlaybackQualityRange) player.setPlaybackQualityRange('auto', 'auto');
+            if (player.setPlaybackQuality) player.setPlaybackQuality(target);
 
-            if (player.setPlaybackQuality) {
-                player.setPlaybackQuality(target);
-            }
-
-            clickQualitySetting(video, uiTargetText); // handles resetting isProgrammaticQualityChange
+            clickQualitySetting(video, uiTargetText);
         } catch (e) {
-            isProgrammaticQualityChange = false;
             console.error('[Audio Mode] Error restoring quality:', e);
         }
     };
@@ -637,36 +592,19 @@ if (!window.__youtubeAudioModeLoaded) {
             if (setQualityRetries < 5) {
                 setQualityRetries++;
                 setTimeout(setLowestQuality, 1000);
-            } else {
-                console.log('[Audio Mode] Could not find player for quality, giving up.');
             }
             return;
         }
         setQualityRetries = 0;
-
         forceLowestQuality(player, video);
-
-        if (!player.__audioModeQualityAttempted && !video.paused) {
-            setTimeout(() => {
-                const q = player.getPlaybackQuality ? player.getPlaybackQuality() : '';
-                if (q !== 'tiny' && q !== 'small') {
-                    clickQualitySetting(video, '144p');
-                    player.__audioModeQualityAttempted = true;
-                }
-            }, 800);
-        }
     }
 
     async function createAudioModeOverlay() {
         await loadMessages(currentLanguage);
 
-        if (audioModeOverlay) {
-            audioModeOverlay.remove();
-        }
+        if (audioModeOverlay) audioModeOverlay.remove();
 
-        const videoContainer = document.querySelector('.html5-video-container') ||
-            document.querySelector('#player-container');
-
+        const videoContainer = document.querySelector('.html5-video-container') || document.querySelector('#player-container');
         if (!videoContainer) return;
 
         audioModeOverlay = document.createElement('div');
@@ -693,45 +631,30 @@ if (!window.__youtubeAudioModeLoaded) {
         videoContainer.style.position = 'relative';
         videoContainer.style.width = '100%';
         videoContainer.style.height = '100%';
-
         videoContainer.appendChild(audioModeOverlay);
 
-        if (currentLanguage === 'ar') {
-            audioModeOverlay.setAttribute('dir', 'rtl');
-        }
+        if (currentLanguage === 'ar') audioModeOverlay.setAttribute('dir', 'rtl');
 
         if (chrome.runtime?.id) {
             try {
                 chrome.storage.sync.get(['backgroundType', 'backgroundValue'], (result) => {
-                    if (!chrome.runtime.lastError) {
-                        updateOverlayTheme(result.backgroundType, result.backgroundValue);
-                    }
+                    if (!chrome.runtime.lastError) updateOverlayTheme(result.backgroundType, result.backgroundValue);
                 });
-            } catch (error) {
-                console.log('[Audio Mode] Error accessing storage:', error);
-            }
+            } catch (error) { }
         }
 
         const video = getVideoElement();
         const visualizer = audioModeOverlay.querySelector('.audio-visualizer');
 
         if (video && visualizer) {
-            if (video.paused) {
-                visualizer.classList.add('paused');
-            }
+            if (video.paused) visualizer.classList.add('paused');
 
             const updatePlayState = () => {
-                if (video.paused) {
-                    visualizer.classList.add('paused');
-                } else {
-                    visualizer.classList.remove('paused');
-                }
+                video.paused ? visualizer.classList.add('paused') : visualizer.classList.remove('paused');
             };
 
             videoPlayHandler = updatePlayState;
             videoPauseHandler = updatePlayState;
-            videoTimeUpdateHandler = null;
-
             video.addEventListener('play', videoPlayHandler);
             video.addEventListener('pause', videoPauseHandler);
         }
@@ -775,11 +698,8 @@ if (!window.__youtubeAudioModeLoaded) {
             if (title) title.textContent = t('activeTitle');
             if (desc) desc.textContent = t('activeDesc');
 
-            if (currentLanguage === 'ar') {
-                audioModeOverlay.setAttribute('dir', 'rtl');
-            } else {
-                audioModeOverlay.removeAttribute('dir');
-            }
+            if (currentLanguage === 'ar') audioModeOverlay.setAttribute('dir', 'rtl');
+            else audioModeOverlay.removeAttribute('dir');
         }
     }
 
@@ -790,9 +710,7 @@ if (!window.__youtubeAudioModeLoaded) {
             if (Math.abs(video.playbackRate - currentPlaybackSpeed) > 0.01) {
                 isApplyingSpeed = true;
                 video.playbackRate = currentPlaybackSpeed;
-                setTimeout(() => {
-                    isApplyingSpeed = false;
-                }, 100);
+                setTimeout(() => { isApplyingSpeed = false; }, 100);
             }
         }
     }
@@ -810,23 +728,16 @@ if (!window.__youtubeAudioModeLoaded) {
                 document.querySelector(".ytd-video-primary-info-renderer h1") ||
                 document.querySelector("h1.title");
 
-            if (titleEl) {
-                videoTitle = titleEl.textContent.trim();
-            } else if (document.title) {
-                videoTitle = document.title.replace(" - YouTube", "");
-            }
+            if (titleEl) videoTitle = titleEl.textContent.trim();
+            else if (document.title) videoTitle = document.title.replace(" - YouTube", "");
 
             const channelEl = document.querySelector("#upload-info #channel-name a") ||
                 document.querySelector("ytd-channel-name a");
-            if (channelEl) {
-                channelName = channelEl.textContent.trim();
-            }
+            if (channelEl) channelName = channelEl.textContent.trim();
 
             const urlParams = new URLSearchParams(window.location.search);
             videoId = urlParams.get('v');
-        } catch (e) {
-            console.log("Error fetching metadata", e);
-        }
+        } catch (e) { }
 
         const thumbnailUrl = videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : '';
 
@@ -852,10 +763,11 @@ if (!window.__youtubeAudioModeLoaded) {
             clearVideoCache();
             _videoPushListenersAttached = false;
 
+            setProgrammaticLock();
+            userManuallyChangedQuality = false;
+
             if (audioModeEnabled) {
-                setTimeout(() => {
-                    enableAudioMode();
-                }, TIMING.RETRY_DELAY);
+                setTimeout(() => enableAudioMode(), TIMING.RETRY_DELAY);
             }
 
             setTimeout(attachVideoPushListeners, TIMING.RETRY_DELAY + 500);
@@ -871,9 +783,7 @@ if (!window.__youtubeAudioModeLoaded) {
         speedEnforcementEvents.forEach(eventName => {
             document.addEventListener(eventName, (e) => {
                 if (!userSetSpeed) return;
-                if (e.target.tagName === 'VIDEO') {
-                    setTimeout(applyPlaybackSpeed, 150);
-                }
+                if (e.target.tagName === 'VIDEO') setTimeout(applyPlaybackSpeed, 150);
             });
         });
 
@@ -896,8 +806,5 @@ if (!window.__youtubeAudioModeLoaded) {
 
     setTimeout(attachVideoPushListeners, 1500);
 
-    window.addEventListener('beforeunload', () => {
-        stopUsageTracking();
-    });
-
+    window.addEventListener('beforeunload', () => stopUsageTracking());
 }
