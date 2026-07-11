@@ -21,7 +21,7 @@ if (!window.__youtubeAudioModeLoaded) {
     const QUALITY = {
         TARGET: 'tiny',  // 144p
         FALLBACK: 'small',
-        RESTORE: 'hd720' // 720p
+        RESTORE: 'large' // 480p
     };
 
     const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -491,7 +491,7 @@ if (!window.__youtubeAudioModeLoaded) {
         try {
             const availableLevels = player.getAvailableQualityLevels ? player.getAvailableQualityLevels() : [];
             let target = QUALITY.RESTORE;
-            let uiTargetText = '720p';
+            let uiTargetText = '480';
 
             if (availableLevels.length > 0 && !availableLevels.includes(QUALITY.RESTORE)) {
                 target = 'auto';
