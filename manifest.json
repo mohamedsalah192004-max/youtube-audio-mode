@@ -12,7 +12,7 @@
         "webNavigation"
     ],
     "host_permissions": [
-        "https://www.youtube.com/watch*"
+        "https://www.youtube.com/*"
     ],
     "action": {
         "default_popup": "popup.html",
@@ -40,7 +40,7 @@
     "content_scripts": [
         {
             "matches": [
-                "https://www.youtube.com/watch*"
+                "https://www.youtube.com/*"
             ],
             "js": [
                 "content.js"
